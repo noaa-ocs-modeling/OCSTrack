@@ -41,11 +41,11 @@ Here's a typical workflow demonstrating how to use OCSTrack to download satellit
 import numpy as np
 import xarray as xr
 # Assuming ocstrack is installed and available in your environment
-from Model.model import SCHISM
-from Satellite.satellite import SatelliteData
-from Satellite import get_sat
-from Collocation.collocate import Collocate
-from utils import convert_longitude
+from ocstrack.Model.model import SCHISM
+from ocstrack.Satellite.satellite import SatelliteData
+from ocstrack.Satellite import get_sat
+from ocstrack.Collocation.collocate import Collocate
+from ocstrack.utils import convert_longitude
 
 
 # 1. Download Satellite Data
