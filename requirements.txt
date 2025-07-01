@@ -1,0 +1,6 @@
+numpy
+xarray
+requests
+scipy
+tqdm
+

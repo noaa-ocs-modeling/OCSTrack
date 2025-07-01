@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ocstrack"
+version = "0.1.0"
+description = "Satellite data download, crop, and collocation with model outputs"
+authors = [
+    { name = "Felicio Cassalho", email = "felicio.cassalho@noaa.gov" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "numpy",
+    "xarray",
+    "scipy",
+    "tqdm",
+    "requests",
+]
+
+[project.urls]
+Homepage = "https://github.com/felicio93/model_sat_OOP"
+Repository = "https://github.com/felicio93/model_sat_OOP"
