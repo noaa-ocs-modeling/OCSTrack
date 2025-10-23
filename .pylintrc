@@ -1,0 +1,12 @@
+max-line-length=100
+
+# A list of common messages to disable.
+# C0103 (invalid-name): Allows 'x', 'y', 'z', 'df', 'i', 'ds', etc.
+# R0913 (too-many-arguments): Common in scientific functions.
+# R0902 (too-many-instance-attributes): Common in class-based workflows.
+disable=
+    C0103,  # invalid-name
+    R0913,  # too-many-arguments
+    R0902,  # too-many-instance-attributes
+    # C0301,  # line-too-long (if you prefer not to reformat)
+    R0914   # too-many-locals

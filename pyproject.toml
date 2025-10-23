@@ -3,8 +3,8 @@ requires = ["setuptools>=42", "wheel", "setuptools_scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
+name = "ocstrack"
 dynamic = ["version"]
-
 description = "Satellite data download, crop, and collocation with model outputs"
 authors = [
     { name = "Felicio Cassalho", email = "felicio.cassalho@noaa.gov" }
@@ -25,6 +25,12 @@ dependencies = [
 [project.urls]
 Homepage = "https://github.com/noaa-ocs-modeling/OCSTrack"
 Repository = "https://github.com/noaa-ocs-modeling/OCSTrack"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pylint",
+]
 
 [tool.setuptools_scm]
 write_to = "ocstrack/_version.py"

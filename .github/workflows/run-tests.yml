@@ -1,0 +1,58 @@
+name: Run Tests & Lint (CI)
+
+on:
+  push:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  # --- JOB 1: RUN PYLINT --- #
+  lint:
+    runs-on: ubuntu-latest  # No need to run on all OSs
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # We only need the dev dependencies for this
+        pip install .[dev]
+
+    - name: Run Pylint
+      run: |
+        # Run pylint on your main package folder
+        # (Replace 'ocstrack' if your folder is named differently)
+        pylint ocstrack
+
+  # --- JOB 2: RUN TESTS --- #
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11"]
+
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev]
+
+    - name: Run Pytest
+      run: pytest
