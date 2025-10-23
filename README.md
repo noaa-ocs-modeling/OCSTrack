@@ -31,10 +31,15 @@ Seamlessly integrates with NOAA [CoastalWatch](https://coastwatch.noaa.gov/cwn/p
     conda activate ocstrack
     ```
 
-2.  **Install `ocstrack` from GitHub:**
+2.  **Install `ocstrack`:**
     Finally, install this package using `pip`.
     ```bash
     pip install ocstrack
+    ```
+
+    If you want to install the latest dev version, using this instead:
+    ```bash
+    pip install "git+[https://github.com/noaa-ocs-modeling/OCSTrack.git](https://github.com/noaa-ocs-modeling/OCSTrack.git)"
     ```
 
 ## Usage
