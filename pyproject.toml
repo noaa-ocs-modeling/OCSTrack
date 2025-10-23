@@ -34,3 +34,6 @@ dev = [
 
 [tool.setuptools_scm]
 write_to = "ocstrack/_version.py"
+# Try forcing cleaner version schemes for releases:
+version_scheme = "no-guess-dev"
+local_scheme = "no-local-version"
