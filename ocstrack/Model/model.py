@@ -1,3 +1,5 @@
+""" Module for handling the Model data """
+
 import logging
 import os
 import re
