@@ -28,7 +28,7 @@ Repository = "https://github.com/noaa-ocs-modeling/OCSTrack"
 
 [project.optional-dependencies]
 dev = [
-    "pytest",
+    "pytest>=6.0",
     "pylint",
 ]
 
