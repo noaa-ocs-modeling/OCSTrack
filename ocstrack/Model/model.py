@@ -205,32 +205,32 @@ class SCHISM:
 
     @property
     def mesh_x(self) -> np.ndarray:
-        """ """
+        """ return mesh_x """
         return self._mesh_x
     @mesh_x.setter
     def mesh_x(self, new_mesh_x: Union[np.ndarray, list]):
-        """ """
+        """ set mesh_y """
         if len(new_mesh_x) != len(self.mesh_x):
             raise ValueError("New longitude array must match existing size.")
         self._mesh_x = new_mesh_x
 
     @property
     def mesh_y(self) -> np.ndarray:
-        """ """
+        """ return mesh_y """
         return self._mesh_y
     @mesh_y.setter
     def mesh_y(self, new_mesh_y: Union[np.ndarray, list]):
-        """ """
+        """ set mesh_y """
         if len(new_mesh_y) != len(self.mesh_y):
             raise ValueError("New longitude array must match existing size.")
         self._mesh_y = new_mesh_y
 
     @property
     def mesh_depth(self) -> np.ndarray:
-        """ """
+        """ return mesh_depth """
         return self._mesh_depth
 
     @property
     def files(self) -> List[str]:
-        """ """
+        """ return file list """
         return self._files

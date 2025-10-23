@@ -43,44 +43,44 @@ class SatelliteData:
 
     @property
     def time(self):
-        """ """
+        """ return time """
         return self.ds.time.values
 
     @property
     def lon(self):
-        """ """
+        """ return lon """
         return self.ds.lon.values
     @lon.setter
     def lon(self, new_lon: Union[np.ndarray, list]):
-        """ """
+        """ set lon """
         if len(new_lon) != len(self.ds.lon):
             raise ValueError("New longitude array must match existing size.")
         self.ds['lon'] = ('time', np.array(new_lon))
 
     @property
     def lat(self):
-        """ """
+        """ return lat """
         return self.ds.lat.values
     @lat.setter
     def lat(self, new_lat: Union[np.ndarray, list]):
-        """ """
+        """ set lat """
         if len(new_lat) != len(self.ds.lat):
             raise ValueError("New latitude array must match existing size.")
         self.ds['lat'] = ('time', np.array(new_lat))
 
     @property
     def swh(self):
-        """ """
+        """ return swh """
         return self.ds.swh.values
 
     @property
     def sla(self):
-        """ """
+        """ return sla """
         return self.ds.sla.values
 
     @property
     def source(self):
-        """ """
+        """ return source """
         return self.ds.source.values
 
     def filter_by_time(self,
