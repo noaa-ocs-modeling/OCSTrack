@@ -12,11 +12,6 @@ from ocstrack.Collocation.temporal import temporal_nearest, temporal_interpolate
 from ocstrack.Collocation.spatial import GeocentricSpatialLocator, inverse_distance_weights
 from ocstrack.Collocation.output import make_collocated_nc
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler()]
-)
 _logger = logging.getLogger(__name__)
 
 

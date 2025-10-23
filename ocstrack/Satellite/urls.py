@@ -1,3 +1,4 @@
+"""Satellite data URLS"""
 
 URL_TEMPLATES = {
     'sentinel3a': 'https://www.star.nesdis.noaa.gov/data/pub0010/lsa/johnk/coastwatch/3a/3a_',

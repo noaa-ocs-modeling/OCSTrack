@@ -1,3 +1,5 @@
+"""Functions for temporal collocation"""
+
 import numpy as np
 import xarray as xr
 
@@ -107,6 +109,8 @@ def temporal_interpolated(ds_sat: xr.Dataset,
     dt0 = np.abs(sat_sub["time"].values - t0)
     dt1 = np.abs(sat_sub["time"].values - t1)
     nearest_model_times = np.where(dt0 <= dt1, t0, t1)
-    time_deltas = (sat_sub["time"].values - nearest_model_times).astype("timedelta64[s]").astype(int)
+    time_deltas = (
+        sat_sub["time"].values - nearest_model_times
+        ).astype("timedelta64[s]").astype(int)
 
     return sat_sub, ib, ia, weights, time_deltas

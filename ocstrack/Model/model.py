@@ -6,15 +6,8 @@ from typing import List, Tuple, Union
 import numpy as np
 import xarray as xr
 
-# Set up logging
-logging.basicConfig(
-    level=logging.WARNING,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-    ]
-)
-_logger = logging.getLogger()
+
+_logger = logging.getLogger(__name__)
 
 
 def natural_sort_key(filename: str) -> List[Union[int, str]]:
