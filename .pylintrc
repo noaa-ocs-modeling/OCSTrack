@@ -39,7 +39,7 @@ extension-pkg-whitelist=
 fail-on=
 
 # Specify a score threshold under which the program will exit with error.
-fail-under=0
+fail-under=9.
 
 # Interpret the stdin as a python script, whose filename needs to be passed as
 # the module_or_package argument.
@@ -436,7 +436,23 @@ confidence=HIGH,
 # --enable=similarities". If you want to run only the classes checker, but have
 # no Warning level messages displayed, use "--disable=all --enable=classes
 # --disable=W".
-disable=C0114,R0917,C0411,C0305,C0301,W3101,W0107,W0718,W0707,C0303,C0304,C0116,R0801,R1705
+disable=arguments-differ,
+        fixme,
+        invalid-name,
+        unused-variable,
+        unused-argument,
+        too-many-arguments,
+        too-many-locals,
+        too-many-lines,
+        too-many-nested-blocks,
+        too-many-branches,
+        too-many-statements,
+        too-many-public-methods,
+        too-many-instance-attributes,
+        too-few-public-methods,
+        logging-fstring-interpolation,
+        super-init-not-called,
+        unspecified-encoding,
 
 # Return non-zero exit code only for E (Error) and F (Fatal) messages.
 fail-on = E,F
