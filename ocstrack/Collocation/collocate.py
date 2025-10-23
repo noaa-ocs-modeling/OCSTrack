@@ -1,14 +1,16 @@
+"""Collocate Module"""
+
 from typing import Optional, Tuple, Union
 import logging
 import numpy as np
 import xarray as xr
 from tqdm import tqdm
 
-from Model.model import SCHISM
-from Satellite.satellite import SatelliteData
-from Collocation.temporal import temporal_nearest, temporal_interpolated
-from Collocation.spatial import GeocentricSpatialLocator, inverse_distance_weights
-from Collocation.output import make_collocated_nc
+from ocstrack.Model.model import SCHISM
+from ocstrack.Satellite.satellite import SatelliteData
+from ocstrack.Collocation.temporal import temporal_nearest, temporal_interpolated
+from ocstrack.Collocation.spatial import GeocentricSpatialLocator, inverse_distance_weights
+from ocstrack.Collocation.output import make_collocated_nc
 
 logging.basicConfig(
     level=logging.INFO,
@@ -82,7 +84,8 @@ class Collocate:
         self.temporal_interp = temporal_interp
 
         if search_radius is not None and n_nearest is not None:
-            _logger.warning("Both search_radius and n_nearest provided; ignoring n_nearest and using radius-based spatial matching.")
+            _logger.warning("Both search_radius and n_nearest provided;" \
+            "ignoring n_nearest and using radius-based spatial matching.")
         elif search_radius is None and n_nearest is None:
             raise ValueError("Specify either 'n_nearest' or 'search_radius'")
 
@@ -91,7 +94,7 @@ class Collocate:
         self.locator = GeocentricSpatialLocator(
             self.model.mesh_x, self.model.mesh_y, model_height=None
         )
-        
+
         # If radius search is on, nullify n_nearest
         if search_radius is not None:
             self.n_nearest = None  # Prevent accidental use
@@ -113,8 +116,12 @@ class Collocate:
 
     def _extract_model_values(self,
                               m_var: xr.DataArray,
-                              times_or_inds: Union[np.ndarray, Tuple[np.ndarray, np.ndarray, np.ndarray]],
-                              nodes: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+                              times_or_inds: Union[np.ndarray,
+                                                   Tuple[np.ndarray,
+                                                         np.ndarray,
+                                                         np.ndarray]],
+                              nodes: np.ndarray) -> Tuple[np.ndarray,
+                                                          np.ndarray]:
         """
         Extract model variable values and corresponding depths at given times and nodes.
 
@@ -187,7 +194,7 @@ class Collocate:
             return sat_sub["height"].values
         if 'altitude' in sat_sub:
             return sat_sub["altitude"].values
-        
+
         _logger.warning("No 'height' or 'altitude' in satellite data. "
                        "Defaulting to 0m for geocentric query. "
                        "This may be inaccurate for altimeter data.")
@@ -266,7 +273,9 @@ class Collocate:
         # Perform extraction once
         if self.temporal_interp:
             m_vals, m_dpts = self._extract_model_values(
-                m_var, (np.array(flat_ib), np.array(flat_ia), np.array(flat_wt)), np.array(flat_nodes)
+                m_var, (np.array(flat_ib),
+                        np.array(flat_ia),
+                        np.array(flat_wt)),np.array(flat_nodes)
             )
         else:
             m_vals, m_dpts = self._extract_model_values(
@@ -279,7 +288,9 @@ class Collocate:
 
         split_vals = unflatten(m_vals, obs_lens)
         split_dpts = unflatten(m_dpts, obs_lens)
-        split_dists = unflatten(np.concatenate([np.array(d) for d in all_dists if len(d) > 0]), obs_lens)
+        split_dists = unflatten(
+            np.concatenate([np.array(d) for d in all_dists if len(d) > 0]), obs_lens
+            )
         split_nodes = unflatten(np.array(flat_nodes), obs_lens)
 
         # Handle obs with no neighbors
@@ -346,7 +357,7 @@ class Collocate:
         dists, nodes = self.locator.query_nearest(
             lons, lats, heights, k=self.n_nearest
         )
-        
+
         m_vals, m_dpts = self._extract_model_values(m_var, time_args, nodes)
         weights = inverse_distance_weights(dists, self.weight_power)
         weighted = (m_vals * weights).sum(axis=1)
@@ -396,7 +407,9 @@ class Collocate:
             m_times = m_var["time"].values
 
             if self.temporal_interp:
-                sat_sub, ib, ia, wts, tdel = temporal_interpolated(self.sat.ds, m_times, self.time_buffer)
+                sat_sub, ib, ia, wts, tdel = temporal_interpolated(self.sat.ds,
+                                                                   m_times,
+                                                                   self.time_buffer)
                 time_args = (ib, ia, wts)
             else:
                 sat_sub, idx, tdel = temporal_nearest(self.sat.ds, m_times, self.time_buffer)
@@ -415,7 +428,13 @@ class Collocate:
             results["sat_sla"].append(sat_sub["sla"].values)
             results["time_deltas"].append(tdel)
 
-            for k in ["model_swh", "model_dpt", "dist_deltas", "node_ids", "model_swh_weighted", "bias_raw", "bias_weighted"]:
+            for k in ["model_swh",
+                      "model_dpt",
+                      "dist_deltas",
+                      "node_ids",
+                      "model_swh_weighted",
+                      "bias_raw",
+                      "bias_weighted"]:
                 results[k].append(spatial[k])
 
             if include_coast:

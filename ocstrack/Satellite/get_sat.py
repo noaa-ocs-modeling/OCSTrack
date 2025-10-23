@@ -13,15 +13,7 @@ from tqdm import tqdm
 from .urls import URL_TEMPLATES
 
 
-logging.basicConfig(
-    level=logging.WARNING,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),  # Print logs to the console
-        # logging.FileHandler('get_sat.log', mode='w')
-    ]
-)
-_logger = logging.getLogger()
+_logger = logging.getLogger(__name__)
 
 
 def generate_daily_dates(start_date_str: str,

@@ -1,3 +1,5 @@
+"""Utility functions"""
+
 import logging
 from typing import Union
 
@@ -35,13 +37,13 @@ def convert_longitude(lon: Union[float, np.ndarray],
     lon = np.asarray(lon)
     if mode == 1:
         return lon % 360
-    elif mode == 2:
+    if mode == 2:
         return np.where(lon > 180, lon - 360, lon)
-    elif mode == 3:
+    if mode == 3:
         return lon + 180
-    elif mode == 4:
+    if mode == 4:
         return (lon + 180) % 360
-    elif mode == 5:
+    if mode == 5:
         return (lon - 180) % 360
     else:
         raise ValueError(f"Invalid mode {mode}. Supported modes: 1, 2, 3, 4, 5")
