@@ -7,7 +7,7 @@ from tqdm import tqdm
 from Model.model import SCHISM
 from Satellite.satellite import SatelliteData
 from Collocation.temporal import temporal_nearest, temporal_interpolated
-from Collocation.spatial import NearestSpatialLocator, RadiusSpatialLocator, inverse_distance_weights
+from Collocation.spatial import GeocentricSpatialLocator, inverse_distance_weights
 from Collocation.output import make_collocated_nc
 
 logging.basicConfig(
@@ -37,6 +37,7 @@ class Collocate:
     -----
     Collocation is performed using:
     - Nearest N spatial nodes (with inverse distance weighting)
+    - Radius (meters) based search
     - Nearest or interpolated temporal matching
     - Optional distance-to-coast dataset for filtering/post-processing
 
@@ -76,6 +77,7 @@ class Collocate:
         self.sat = satellite
         self.dist_coast = dist_coast["distcoast"] if dist_coast is not None else None
         self.n_nearest = n_nearest
+        self.search_radius = search_radius
         self.weight_power = weight_power
         self.temporal_interp = temporal_interp
 
@@ -85,13 +87,14 @@ class Collocate:
             raise ValueError("Specify either 'n_nearest' or 'search_radius'")
 
         # Set locator
+        _logger.info("Initializing 3D Geocentric (WGS 84) spatial locator.")
+        self.locator = GeocentricSpatialLocator(
+            self.model.mesh_x, self.model.mesh_y, model_height=None
+        )
+        
+        # If radius search is on, nullify n_nearest
         if search_radius is not None:
-            self.locator = RadiusSpatialLocator(
-                self.model.mesh_x, self.model.mesh_y, radius_m=search_radius)
             self.n_nearest = None  # Prevent accidental use
-        else:
-            self.locator = NearestSpatialLocator(
-                self.model.mesh_x, self.model.mesh_y)
 
         # Automatically estimate time buffer if not provided
         if time_buffer is None:
@@ -175,6 +178,21 @@ class Collocate:
             method="nearest",
         ).values
 
+    def _get_sat_height(self, sat_sub: xr.Dataset) -> np.ndarray:
+        """
+        Extracts satellite height/altitude from the dataset.
+        Defaults to 0m with a warning if not found.
+        """
+        if 'height' in sat_sub:
+            return sat_sub["height"].values
+        if 'altitude' in sat_sub:
+            return sat_sub["altitude"].values
+        
+        _logger.warning("No 'height' or 'altitude' in satellite data. "
+                       "Defaulting to 0m for geocentric query. "
+                       "This may be inaccurate for altimeter data.")
+        return np.zeros_like(sat_sub["lon"].values)
+
     def _collocate_with_radius(self, sat_sub, m_var, time_args):
         """
         Collocate satellite observations with model output using a spatial search radius.
@@ -206,8 +224,11 @@ class Collocate:
         """
         lons = sat_sub["lon"].values
         lats = sat_sub["lat"].values
+        heights = self._get_sat_height(sat_sub)
 
-        all_dists, all_nodes = self.locator.query(lons, lats)
+        all_dists, all_nodes = self.locator.query_radius(
+            lons, lats, heights, radius_m=self.search_radius
+        )
 
         flat_nodes = []
         flat_ib, flat_ia, flat_wt = [], [], []
@@ -320,7 +341,11 @@ class Collocate:
         """
         lons = sat_sub["lon"].values
         lats = sat_sub["lat"].values
-        dists, nodes = self.locator.query(lons, lats, self.n_nearest)
+        heights = self._get_sat_height(sat_sub)
+
+        dists, nodes = self.locator.query_nearest(
+            lons, lats, heights, k=self.n_nearest
+        )
         
         m_vals, m_dpts = self._extract_model_values(m_var, time_args, nodes)
         weights = inverse_distance_weights(dists, self.weight_power)
@@ -377,10 +402,11 @@ class Collocate:
                 sat_sub, idx, tdel = temporal_nearest(self.sat.ds, m_times, self.time_buffer)
                 time_args = idx
 
-            if isinstance(self.locator, RadiusSpatialLocator):
+            if self.search_radius is not None:
                 spatial = self._collocate_with_radius(sat_sub, m_var, time_args)
             else:
                 spatial = self._collocate_with_nearest(sat_sub, m_var, time_args)
+
             results["time_sat"].append(sat_sub["time"].values)
             results["lat_sat"].append(sat_sub["lat"].values)
             results["lon_sat"].append(sat_sub["lon"].values)
@@ -396,7 +422,7 @@ class Collocate:
                 coast_d = self._coast_distance(sat_sub["lat"].values, sat_sub["lon"].values)
                 results["dist_coast"].append(coast_d)
 
-        n_neighbors = None if isinstance(self.locator, RadiusSpatialLocator) else self.n_nearest
+        n_neighbors = None if self.search_radius is not None else self.n_nearest
         ds_out = make_collocated_nc(results, n_neighbors)
         if output_path:
             ds_out.to_netcdf(output_path)

@@ -18,8 +18,10 @@ dependencies = [
     "scipy",
     "tqdm",
     "requests",
+    "netcdf4",
+    "h5netcdf",
 ]
 
 [project.urls]
-Homepage = "https://github.com/felicio93/model_sat_OOP"
-Repository = "https://github.com/felicio93/model_sat_OOP"
+Homepage = "https://github.com/noaa-ocs-modeling/OCSTrack"
+Repository = "https://github.com/noaa-ocs-modeling/OCSTrack"

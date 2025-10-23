@@ -24,16 +24,18 @@ Seamlessly integrates with NOAA [CoastalWatch](https://coastwatch.noaa.gov/cwn/p
 
 ## Installation
 
-1. Create a Conda Environment:
-```
-conda create --name ocstrack python=3.11
-conda activate ocstrack
-```
+1.  **Create and activate a new conda environment:**
+    This command creates an environment named `ocstrack` and installs all dependencies from `conda-forge`.
+    ```bash
+    conda create -n ocstrack -c conda-forge python=3.10 numpy xarray scipy tqdm requests netcdf4 h5netcdf
+    conda activate ocstrack
+    ```
 
-2. Install the Package:
-```
-pip install "git+https://github.com/noaa-ocs-modeling/OCSTrack.git"
-```
+2.  **Install `ocstrack` from GitHub:**
+    Finally, install this package using `pip`.
+    ```bash
+    pip install "git+[https://github.com/noaa-ocs-modeling/OCSTrack.git](https://github.com/noaa-ocs-modeling/OCSTrack.git)"
+    ```
 
 ## Usage
 Here's a typical workflow demonstrating how to use OCSTrack to download satellite data, load model outputs, and perform collocation.
@@ -62,9 +64,9 @@ get_sat.get_multi_sat(start_date="2019-07-30",
 
 # 2. Define File Paths
 #    Set the paths for your downloaded satellite data, model run, and where you want to save the collocated output.
-sat_path = r"Path/to/Satellite/Data/multisat_cropped_2019-07-30_2019-08-04.nc"
-model_path = r"Path/to/Model/Run/R__/"
-output_path =  r"Path/to/CollocatedFile/collocated.nc"
+sat_path = "/path/to/your/multisat_cropped_2019-07-30_2019-08-04.nc"
+model_path = "/path/to/your/model/run/"
+output_path =  "/path/to/your/collocated_output.nc"
 s_time,e_time = "2019-08-01", "2019-08-03"
 
 # 3. Load Satellite Data
@@ -91,7 +93,7 @@ model_run = SCHISM(
 coll = Collocate(
                  model_run=model_run,
                  satellite=sat_data,
-                 dist_coast=dist_coast,
+                 # dist_coast=dist_coast,
                  n_nearest=3,
                  # search_radius = 3000,
                  temporal_interp=True
@@ -102,7 +104,7 @@ ds_coll = coll.run(output_path=output_path) # Execute the collocation and save t
 ## Contributing
 We welcome contributions to OCSTrack! If you have ideas for improvements, new features, or find a bug, please don't hesitate to open an issue or submit a pull request on our GitHub repository. Your input helps make OCSTrack better for everyone.
 
-#### Contact
+### Contact
 <sub><sup>Contact: felicio.cassalho@noaa.gov </sup></sub>
 
 ![NOAA logo](https://user-images.githubusercontent.com/72229285/216712553-c1e4b2fa-4b6d-4eab-be0f-f7075b6151d1.png)
