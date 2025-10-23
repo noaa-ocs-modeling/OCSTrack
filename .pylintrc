@@ -452,8 +452,9 @@ disable=arguments-differ,
         too-few-public-methods,
         logging-fstring-interpolation,
         super-init-not-called,
-        unspecified-encoding
+        unspecified-encoding,
 
+# Return non-zero exit code only for E (Error) and F (Fatal) messages.
 fail-on = E,F
 
 # Enable the message, report, category or checker with the given id(s). You can

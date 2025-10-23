@@ -1,3 +1,5 @@
+"""Functions for spatial collocation"""
+
 import numpy as np
 from scipy.spatial import KDTree
 from typing import List, Tuple
@@ -83,7 +85,7 @@ class GeocentricSpatialLocator:
         """
         if model_height is None:
             model_height = np.zeros_like(model_lon)
-            
+
         x, y, z = lat_lon_to_cartesian_vec(model_lat, model_lon, model_height)
         self.model_xyz = np.column_stack((x, y, z))
         self.tree = KDTree(self.model_xyz)
@@ -150,12 +152,12 @@ class GeocentricSpatialLocator:
             - Corresponding indices of model nodes per point
         """
         query_points = self._get_query_points(sat_lon, sat_lat, sat_height)
-        
+
         # Find indices of points within the radius
         indices_list = self.tree.query_ball_point(query_points, r=radius_m)
-        
+
         distances_list = []
-        
+
         # Now calculate true distances for those indices
         for i, node_inds in enumerate(indices_list):
             if not node_inds:
@@ -165,10 +167,10 @@ class GeocentricSpatialLocator:
 
             query_point = query_points[i]
             node_points = self.model_xyz[node_inds]
-            
+
             # Calculate true 3D Euclidean distances
             dists = np.linalg.norm(node_points - query_point, axis=1)
-            
+
             distances_list.append(dists)
             indices_list[i] = np.array(node_inds) # Ensure consistent type
 

@@ -1,3 +1,5 @@
+""" Functions for writing collocated outputs file """
+
 import xarray as xr
 import numpy as np
 
@@ -21,6 +23,7 @@ def pad_arrays_to_max(arrays, max_cols):
 
 
 def make_collocated_nc(results: dict, n_nearest: int = None) -> xr.Dataset:
+    """ format the final collocated.nc file"""
     # Determine max neighbors from actual data if not explicitly provided
     max_neighbors = get_max_neighbors(results["model_swh"]) if n_nearest is None else n_nearest
 

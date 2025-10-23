@@ -45,5 +45,5 @@ def convert_longitude(lon: Union[float, np.ndarray],
         return (lon + 180) % 360
     if mode == 5:
         return (lon - 180) % 360
-    else:
-        raise ValueError(f"Invalid mode {mode}. Supported modes: 1, 2, 3, 4, 5")
+
+    raise ValueError(f"Invalid mode {mode}. Supported modes: 1, 2, 3, 4, 5")
