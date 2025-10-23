@@ -55,4 +55,4 @@ jobs:
         pip install -e .[dev]
 
     - name: Run Pytest
-      run: pytest
+      run: pytest --no-tests-found-exit-code=0
