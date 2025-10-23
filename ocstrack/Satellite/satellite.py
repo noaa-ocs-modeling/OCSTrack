@@ -1,7 +1,9 @@
-import xarray as xr
-import numpy as np
+""" Module for handling the Satellite data """
 
 from typing import Union
+
+import xarray as xr
+import numpy as np
 
 class SatelliteData:
     """
@@ -41,36 +43,44 @@ class SatelliteData:
 
     @property
     def time(self):
+        """ """
         return self.ds.time.values
 
     @property
     def lon(self):
+        """ """
         return self.ds.lon.values
     @lon.setter
     def lon(self, new_lon: Union[np.ndarray, list]):
+        """ """
         if len(new_lon) != len(self.ds.lon):
             raise ValueError("New longitude array must match existing size.")
         self.ds['lon'] = ('time', np.array(new_lon))
 
     @property
     def lat(self):
+        """ """
         return self.ds.lat.values
     @lat.setter
     def lat(self, new_lat: Union[np.ndarray, list]):
+        """ """
         if len(new_lat) != len(self.ds.lat):
             raise ValueError("New latitude array must match existing size.")
         self.ds['lat'] = ('time', np.array(new_lat))
-        
+
     @property
     def swh(self):
+        """ """
         return self.ds.swh.values
 
     @property
     def sla(self):
+        """ """
         return self.ds.sla.values
 
     @property
     def source(self):
+        """ """
         return self.ds.source.values
 
     def filter_by_time(self,

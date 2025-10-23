@@ -141,7 +141,8 @@ class SCHISM:
 
         Notes
         -----
-        Only files that contain a 'time' variable and overlap the specified time window are selected.
+        Only files that contain a 'time' variable and overlap the specified time window
+        are selected.
         Time decoding is limited to the 'time' variable for performance and robustness.
         """
         if not os.path.isdir(self.output_dir):
@@ -164,7 +165,7 @@ class SCHISM:
                         continue
                     times = ds['time'].values
                     times = xr.decode_cf(ds[['time']])['time'].values  # decode only time
-    
+
                     if times[-1] >= self.start_date and times[0] <= self.end_date:
                         selected.append(fpath)
             except Exception as e:
@@ -173,7 +174,7 @@ class SCHISM:
             # selected.append(os.path.join(self.output_dir, fname))
         if not selected:
             _logger.warning(f"No files matched pattern in {self.output_dir}.\n"
-                            f"Make sure the model files fall within {self.start_date} and {self.end_date} ")
+            f"Make sure the model files fall within {self.start_date} and {self.end_date} ")
         return selected
 
     def load_variable(self, path: str) -> xr.DataArray:
@@ -201,29 +202,35 @@ class SCHISM:
                 var = var.isel(nSCHISM_vgrid_layers=-1)
         return var
 
-   
+
     @property
     def mesh_x(self) -> np.ndarray:
+        """ """
         return self._mesh_x
     @mesh_x.setter
     def mesh_x(self, new_mesh_x: Union[np.ndarray, list]):
+        """ """
         if len(new_mesh_x) != len(self.mesh_x):
             raise ValueError("New longitude array must match existing size.")
         self._mesh_x = new_mesh_x
 
     @property
     def mesh_y(self) -> np.ndarray:
+        """ """
         return self._mesh_y
     @mesh_y.setter
     def mesh_y(self, new_mesh_y: Union[np.ndarray, list]):
+        """ """
         if len(new_mesh_y) != len(self.mesh_y):
             raise ValueError("New longitude array must match existing size.")
         self._mesh_y = new_mesh_y
 
     @property
     def mesh_depth(self) -> np.ndarray:
+        """ """
         return self._mesh_depth
 
     @property
     def files(self) -> List[str]:
+        """ """
         return self._files
