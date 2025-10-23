@@ -283,7 +283,9 @@ def get_per_sat(start_date: str,
 
     final_dataset = None
     if concat and datasets_to_concat:
-        concat_filename = f"concat_{'cropped_' if cropping_enabled else ''}{sat}_{start_date}_{end_date}.nc"
+        concat_filename = f"concat_{'cropped_' if 
+                                    cropping_enabled else 
+                                    ''}{sat}_{start_date}_{end_date}.nc"
         concat_path = os.path.join(output_dir, concat_filename)
         final_dataset = concat_sat_data(datasets_to_concat, concat_path, sat)
 
@@ -344,7 +346,9 @@ def get_multi_sat(start_date: str,
 
     if all_sat:
         try:
-            multisat_filename = f"multisat_{'cropped_' if lat_min is not None else ''}{start_date}_{end_date}.nc"
+            multisat_filename = f"multisat_{'cropped_' if 
+                                            lat_min is not None else 
+                                            ''}{start_date}_{end_date}.nc"
             multisat_path = os.path.join(output_dir, multisat_filename)
             all_sat_ds = xr.concat(all_sat, dim='time')
             all_sat_ds.to_netcdf(multisat_path)
@@ -358,4 +362,3 @@ def get_multi_sat(start_date: str,
         _logger.warning("No satellite datasets were successfully processed.")
 
     return None
-
