@@ -24,7 +24,7 @@ Seamlessly integrates with NOAA [CoastalWatch](https://coastwatch.noaa.gov/cwn/p
 
 ## Installation
 
-1.  **Create and activate a new conda environment:**
+1.  **Create new conda environment:**
     This command creates an environment named `ocstrack` and installs all dependencies from `conda-forge`.
     ```bash
     conda create -n ocstrack -c conda-forge python=3.10 numpy xarray scipy tqdm requests netcdf4 h5netcdf
@@ -34,7 +34,7 @@ Seamlessly integrates with NOAA [CoastalWatch](https://coastwatch.noaa.gov/cwn/p
 2.  **Install `ocstrack` from GitHub:**
     Finally, install this package using `pip`.
     ```bash
-    pip install "git+[https://github.com/noaa-ocs-modeling/OCSTrack.git](https://github.com/noaa-ocs-modeling/OCSTrack.git)"
+    pip install ocstrack
     ```
 
 ## Usage
