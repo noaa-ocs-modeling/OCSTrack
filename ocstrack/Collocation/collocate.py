@@ -119,6 +119,7 @@ class Collocate:
                                                           np.ndarray]:
         """
         Extract model variable values and corresponding depths at given times and nodes.
+        (MODIFIED to be model-agnostic)
 
         Parameters
         ----------
@@ -136,8 +137,18 @@ class Collocate:
         """
         model_data = m_var.values
         depths = self.model.mesh_depth
-
         values, dpts = [], []
+
+        # Find the node dimension name (e.g., 'node' or 'nSCHISM_hgrid_node')
+        node_dim = None
+        for dim in m_var.dims:
+            if dim != 'time':
+                node_dim = dim
+                break
+
+        if node_dim is None:
+            raise ValueError("Could not find a spatial node dimension in model variable.")
+
 
         if self.temporal_interp:
             ib, ia, wts = times_or_inds
@@ -149,8 +160,13 @@ class Collocate:
         else:
             for i, (t_idx, nd) in enumerate(zip(times_or_inds, nodes)):
                 t = m_var["time"].values[t_idx]
-                values.append(m_var.sel(time=t, nSCHISM_hgrid_node=nd).values)
+                values.append(m_var.sel(time=t, **{node_dim: nd}).values)
                 dpts.append(depths[nd])
+
+        # Handle the N=0 case
+        if not values:
+            k = nodes.shape[1] if nodes.ndim == 2 else 0
+            return np.empty((0, k)), np.empty((0, k))
 
         return np.array(values), np.array(dpts)
 

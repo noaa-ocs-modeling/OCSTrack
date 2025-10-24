@@ -236,3 +236,220 @@ class SCHISM:
     def files(self) -> List[str]:
         """ return file list """
         return self._files
+
+
+class ADCSWAN:
+    """
+    ADCIRC+SWAN model interface
+
+    Handles selection and loading of model outputs from a single ADCIRC+SWAN NetCDF file.
+    The class locates a single file based on 'startswith' and validates its
+    time range against the requested start/end dates.
+    It reads mesh coordinates (x, y, depth) directly from this file.
+
+    This class mimics the SCHISM interface for compatibility.
+    """
+    def __init__(self, rundir: str,
+                 model_dict: dict,
+                 start_date: np.datetime64,
+                 end_date: np.datetime64,
+                 **kwargs):
+        """
+        Initialize an ADCIRC+SWAN model run
+
+        Parameters
+        ----------
+        rundir : str
+            Path to the directory containing the model output NetCDF file
+        model_dict : dict
+            Dictionary with keys: 'startswith', 'var'.
+            'startswith' is the prefix of the NetCDF file (e.g., "swan_HS.63")
+            'var' is the variable to be loaded (e.g., "swan_HS")
+        start_date : np.datetime64
+            Start of the time range for validation and slicing (if needed)
+        end_date : np.datetime64
+            End of the time range for validation and slicing (if needed)
+        **kwargs :
+            Ignored. Added for interface compatibility with SCHISM (e.g., output_subdir).
+        """
+        self.rundir = rundir
+        self.model_dict = model_dict
+        self.start_date = np.datetime64(start_date)
+        self.end_date = np.datetime64(end_date)
+        
+        # Note: self.output_dir is kept for SCHISM compatibility but points to rundir
+        self.output_dir = self.rundir 
+
+        self._validate_model_dict()
+        self._files = self._select_model_files()
+
+        if self._files:
+            self._mesh_path = self._files[0]
+            self._mesh_x, self._mesh_y, self._mesh_depth = self._load_mesh_data(self._mesh_path)
+            _logger.info(f"ADC+SWAN mesh loaded from {self._mesh_path}")
+        else:
+            self._mesh_path = None
+            self._mesh_x, self._mesh_y, self._mesh_depth = (np.array([]), np.array([]), np.array([]))
+            _logger.warning("No ADC+SWAN file found, mesh could not be loaded.")
+
+
+    def _validate_model_dict(self) -> None:
+        """
+        Ensure the model_dict contains all required keys.
+
+        Raises
+        ------
+        ValueError
+            If required keys are missing from model_dict
+        """
+        required_keys = ['startswith', 'var'] # 'var_type' is not required for ADCSWAN
+        missing = [k for k in required_keys if k not in self.model_dict]
+        if missing:
+            raise ValueError(f"Missing keys in model_dict: {missing}")
+
+    def _load_mesh_data(self, filepath: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Parse the ADC+SWAN NetCDF file to extract node coordinates and depth.
+        """
+        _logger.debug(f"Loading mesh data from {filepath}")
+        try:
+            with xr.open_dataset(filepath, drop_variables=['neta','nvel']) as ds:
+                # Use .load() to read data into memory and close the file
+                lons = ds['x'].load().values
+                lats = ds['y'].load().values
+                depths = ds['depth'].load().values
+            return lons, lats, depths
+        except Exception as e:
+            _logger.error(f"Failed to load mesh data from {filepath}: {e}")
+            return np.array([]), np.array([]), np.array([])
+
+
+    def _select_model_files(self) -> List[str]:
+        """
+        Select the ADCIRC+SWAN NetCDF output file and validate its time range.
+
+        Returns
+        -------
+        List[str]
+            A list containing the path to the model file, if found and valid.
+            Otherwise, an empty list.
+        """
+        if not os.path.isdir(self.rundir):
+            _logger.warning(f"Run directory {self.rundir} does not exist.")
+            return []
+
+        all_files = [f for f in os.listdir(self.rundir)
+                     if os.path.isfile(os.path.join(self.rundir, f))]
+        all_files.sort(key=natural_sort_key)
+
+        selected = []
+        file_pattern = self.model_dict['startswith']
+        
+        found_files = [f for f in all_files if f.startswith(file_pattern) and f.endswith(".nc")]
+
+        if not found_files:
+            _logger.warning(f"No file found in {self.rundir} starting with '{file_pattern}'")
+            return []
+        
+        if len(found_files) > 1:
+            _logger.warning(f"Multiple files found matching '{file_pattern}'. "
+                            f"Using the first one: {found_files[0]}")
+        
+        fpath = os.path.join(self.rundir, found_files[0])
+
+        try:
+            # Check time range for overlap
+            with xr.open_dataset(fpath, decode_times=False, drop_variables=['neta','nvel']) as ds:
+                if 'time' not in ds.variables:
+                    _logger.warning(f"File {fpath} has no 'time' variable. Skipping.")
+                    return []
+                
+                # Decode only time for validation
+                times = xr.decode_cf(ds[['time']])['time'].values
+
+                if times[-1] >= self.start_date and times[0] <= self.end_date:
+                    selected.append(fpath)
+                else:
+                    _logger.warning(f"File {fpath} time range ({times[0]} to {times[-1]}) "
+                                    f"does not overlap with requested range "
+                                    f"({self.start_date} to {self.end_date}).")
+        except Exception as e:
+            _logger.warning(f"Error reading {fpath}: {e}")
+            return []
+
+        return selected
+
+    def load_variable(self, path: str) -> xr.DataArray:
+        """
+        Load the specified variable from the model NetCDF file.
+
+        Parameters
+        ----------
+        path : str
+            Path to the NetCDF file to open (should be the one in self.files)
+
+        Returns
+        -------
+        xr.DataArray
+            The requested variable, sliced by time.
+        
+        Notes
+        -----
+        For compatibility with the SCHISM class pattern, this method loads
+        the variable from the *given path*.
+        """
+        _logger.info("Opening model file: %s", path)
+        try:
+            # Xarray will open the file, slice, and then load.
+            ds = xr.open_dataset(path, drop_variables=['neta','nvel'])
+            var = ds[self.model_dict['var']]
+            
+            time_slice = slice(self.start_date, self.end_date)
+            var_sliced = var.sel(time=time_slice)
+            
+            var_loaded = var_sliced.load()
+            ds.close()
+            
+            return var_loaded
+            
+        except KeyError:
+            _logger.error(f"Variable '{self.model_dict['var']}' not found in {path}")
+            ds.close()
+            raise
+        except Exception as e:
+            _logger.error(f"Error loading variable from {path}: {e}")
+            if 'ds' in locals():
+                ds.close()
+            raise
+
+    @property
+    def mesh_x(self) -> np.ndarray:
+        """ return mesh_x (longitude) """
+        return self._mesh_x
+    @mesh_x.setter
+    def mesh_x(self, new_mesh_x: Union[np.ndarray, list]):
+        """ set mesh_x """
+        if len(new_mesh_x) != len(self.mesh_x):
+            raise ValueError("New longitude array must match existing size.")
+        self._mesh_x = np.asarray(new_mesh_x)
+
+    @property
+    def mesh_y(self) -> np.ndarray:
+        """ return mesh_y (latitude) """
+        return self._mesh_y
+    @mesh_y.setter
+    def mesh_y(self, new_mesh_y: Union[np.ndarray, list]):
+        """ set mesh_y """
+        if len(new_mesh_y) != len(self.mesh_y):
+            raise ValueError("New latitude array must match existing size.")
+        self._mesh_y = np.asarray(new_mesh_y)
+
+    @property
+    def mesh_depth(self) -> np.ndarray:
+        """ return mesh_depth """
+        return self._mesh_depth
+
+    @property
+    def files(self) -> List[str]:
+        """ return file list (will contain 0 or 1 file) """
+        return self._files
