@@ -18,8 +18,8 @@ Seamlessly integrates with NOAA [CoastalWatch](https://coastwatch.noaa.gov/cwn/p
 ### Ocean Model Data Support
  Supports outputs from various ocean circulation and wave models:
  * [SCHISM+WWM](https://github.com/schism-dev/schism)
+ * ADCIRC+SWAN
  * WaveWatch3 (to be implemented)
- * ADCIRC+SWAN (to be implemented)
 
 
 ## Installation
