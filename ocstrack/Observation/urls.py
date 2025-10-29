@@ -10,3 +10,7 @@ URL_TEMPLATES = {
     'saral':      'https://www.star.nesdis.noaa.gov/data/pub0010/lsa/johnk/coastwatch/sa/sa_',
     'swot':       'https://www.star.nesdis.noaa.gov/data/pub0010/lsa/johnk/coastwatch/sw/sw_',
 }
+
+# Base URL for Argo data from Ifremer
+# We will append /<region>/<year>/<month>/
+ARGO_BASE_URL = "https://data-argo.ifremer.fr/geo"
