@@ -6,248 +6,641 @@ import numpy as np
 import xarray as xr
 from tqdm import tqdm
 
+# --- MODIFIED IMPORTS ---
 from ocstrack.Model.model import SCHISM
-from ocstrack.Satellite.satellite import SatelliteData
+from ocstrack.Observation.satellite import SatelliteData
+from ocstrack.Observation.argofloat import ArgoData
 from ocstrack.Collocation.temporal import temporal_nearest, temporal_interpolated
 from ocstrack.Collocation.spatial import GeocentricSpatialLocator, inverse_distance_weights
-from ocstrack.Collocation.output import make_collocated_nc
+from ocstrack.Collocation.output import make_collocated_nc_2d, make_collocated_nc_3d
+
+# Try to import gsw for accurate depth, but fall back if not installed
+try:
+    import gsw
+    _HAS_GSW = True
+except ImportError:
+    _HAS_GSW = False
 
 _logger = logging.getLogger(__name__)
 
 
 class Collocate:
-    """Model–satellite collocation engine
+    """
+    Model–observation collocation engine (2D and 3D).
 
-    This is the mains class. 
-    It handles the spatial and temporal collocation of satellite
-    altimetry data (e.g., significant wave height, sea level anomaly (TBD))
-    with unstructured model outputs (e.g., SCHISM). It supports both
-    nearest-neighbor (in time) and temporally interpolated collocation strategies.
+    This is the main class. It handles the spatial and temporal
+    collocation of observation data (Satellite or Argo) with
+    unstructured model outputs (e.g., SCHISM).
+    
+    It dispatches to either a 2D/surface ('2D', '3D_Surface') or
+    3D/profile ('3D_Profile') collocation strategy based on the
+    model_run's 'var_type'.
 
     Methods
     -------
     run(output_path=None)
-        Run the collocation over all model files and return a combined
-        xarray.Dataset.
-
-    Notes
-    -----
-    Collocation is performed using:
-    - Nearest N spatial nodes (with inverse distance weighting)
-    - Radius (meters) based search
-    - Nearest or interpolated temporal matching
-    - Optional distance-to-coast dataset for filtering/post-processing
-
-    Automatically infers time_buffer from model time step if not provided.
+        Run the full collocation and return a combined xarray.Dataset.
     """
     def __init__(self,
-                model_run: SCHISM,
-                satellite: SatelliteData,
-                dist_coast: Optional[xr.Dataset] = None,
-                n_nearest: Optional[int] = None,
-                search_radius: Optional[float] = None,
-                time_buffer: Optional[np.timedelta64] = None,
-                weight_power: float = 1.0,
-                temporal_interp: bool = False) -> None:
+                 model_run: SCHISM,
+                 observation: Union[SatelliteData, ArgoData],
+                 dist_coast: Optional[xr.Dataset] = None,
+                 n_nearest: Optional[int] = 4,
+                 search_radius: Optional[float] = None,
+                 time_buffer: Optional[np.timedelta64] = None,
+                 weight_power: float = 1.0,
+                 temporal_interp: bool = False) -> None:
         """
+        Initialize the Collocate object.
+
         Parameters
         ----------
         model_run : SCHISM
-            Model object containing grid, file paths, and data access
-        satellite : SatelliteData
-            Satellite data wrapper providing SWH, SLA, etc.
+            Initialized Model object (e.g., SCHISM) containing grid and file info.
+        observation : Union[SatelliteData, ArgoData]
+            Initialized Observation object (e.g., SatelliteData or ArgoData).
         dist_coast : xarray.Dataset, optional
-            Optional dataset containing distance-to-coast info
+            Optional dataset containing distance-to-coast info.
         n_nearest : int, optional 
-            Number of nearest spatial model nodes to use
+            Number of nearest spatial model nodes to use (default=4).
         search_radius : float, optional
             Radius (in meters) to search for spatial neighbors. 
-            If provided, overwrite n_nearest and uses radius-based spatial matching.
+            If provided, overwrites n_nearest.
         time_buffer : np.timedelta64, optional
-            Temporal search buffer; if None, inferred from model timestep
+            Temporal search buffer; if None, inferred from model timestep.
         weight_power : float, default=1.0
-            Power exponent for inverse distance weighting
+            Power exponent for inverse distance weighting.
         temporal_interp : bool, default=False
-            Whether to perform linear temporal interpolation
+            Whether to perform linear temporal interpolation (default=False).
+        
+        Raises
+        ------
+        ValueError
+            If both or neither of 'n_nearest'/'search_radius' are provided,
+            or if time buffer cannot be inferred.
         """
         self.model = model_run
-        self.sat = satellite
+        self.obs = observation
         self.dist_coast = dist_coast["distcoast"] if dist_coast is not None else None
         self.n_nearest = n_nearest
         self.search_radius = search_radius
         self.weight_power = weight_power
         self.temporal_interp = temporal_interp
 
+        if isinstance(self.obs, SatelliteData):
+            self.obs_time_coord = 'time'
+        elif isinstance(self.obs, ArgoData):
+            self.obs_time_coord = 'JULD'
+        else:
+            raise TypeError("Observation type must be SatelliteData or ArgoData")
+        
+        # Store the collocation type based on the model dict
+        self.collocation_type = self.model.model_dict.get('var_type', '2D')
+
         if search_radius is not None and n_nearest is not None:
-            _logger.warning("Both search_radius and n_nearest provided;" \
-            "ignoring n_nearest and using radius-based spatial matching.")
+            _logger.warning("Both search_radius and n_nearest provided; "
+                            "ignoring n_nearest and using radius-based spatial matching.")
+            self.n_nearest = None # Radius search overrides
         elif search_radius is None and n_nearest is None:
             raise ValueError("Specify either 'n_nearest' or 'search_radius'")
 
-        # Set locator
         _logger.info("Initializing 3D Geocentric (WGS 84) spatial locator.")
         self.locator = GeocentricSpatialLocator(
             self.model.mesh_x, self.model.mesh_y, model_height=None
         )
+        
+        if not _HAS_GSW and self.collocation_type == '3D_Profile':
+             _logger.warning("`gsw` library not found. `pip install gsw` for accurate depth conversion."
+                             " Falling back to simple approximation (dbar * -1.0197).")
 
-        # If radius search is on, nullify n_nearest
-        if search_radius is not None:
-            self.n_nearest = None  # Prevent accidental use
-
-        # Automatically estimate time buffer if not provided
+        # --- Time buffer logic based on collocation type ---
         if time_buffer is None:
-            example_file = self.model.files[0]
-            times = self.model.load_variable(example_file)["time"].values
+            _logger.info("Inferring time_buffer...")
+            # For 2D/Surface, load one file to get times
+            if self.collocation_type in ['2D', '3D_Surface']:
+                if not self.model.files:
+                    raise ValueError("Cannot infer time_buffer: Model has no files.")
+                example_file = self.model.files[0]
+                times = self.model.load_variable(example_file)["time"].values
+            
+            # For 3D_Profile, load all data *once* and get times
+            elif self.collocation_type == '3D_Profile':
+                _logger.info("Loading 3D model data for time buffer inference...")
+                self.model_data = self.model.load_3d_data()
+                times = self.model_data.time.values
+            
+            else:
+                raise ValueError(f"Unknown var_type: {self.collocation_type}")
 
             if len(times) < 2:
                 raise ValueError("Cannot infer time_buffer: less than two model timesteps.")
-
-            # Calculate timestep and use half of it as buffer
-            timestep = times[1] - times[0]  # Assumes constant step
+            
+            timestep = np.diff(times).mean() # Use mean diff for safety
             self.time_buffer = timestep / 2
-            _logger.info(f"Inferred time_buffer as half timestep: {self.time_buffer}")
+            _logger.info(f"Inferred time_buffer as half mean timestep: {self.time_buffer}")
+        
         else:
             self.time_buffer = time_buffer
+            # If 3D_Profile, load data if it wasn't already loaded
+            if self.collocation_type == '3D_Profile':
+                # Check if it was already loaded by buffer logic
+                if not hasattr(self, 'model_data'):
+                    _logger.info("Loading 3D model data...")
+                    self.model_data = self.model.load_3d_data()
 
-    def _extract_model_values(self,
-                              m_var: xr.DataArray,
-                              times_or_inds: Union[np.ndarray,
-                                                   Tuple[np.ndarray,
-                                                         np.ndarray,
-                                                         np.ndarray]],
-                              nodes: np.ndarray) -> Tuple[np.ndarray,
-                                                          np.ndarray]:
+    def run(self, output_path: Optional[str] = None) -> xr.Dataset:
         """
-        Extract model variable values and corresponding depths at given times and nodes.
-        (MODIFIED to be model-agnostic)
+        Run the full model–observation collocation process.
+
+        Dispatches to the correct method (surface or profile)
+        based on the 'var_type' provided during initialization.
 
         Parameters
         ----------
-        m_var : xarray.DataArray
-            Model variable to extract from (e.g. significant wave height)
-        times_or_inds : tuple or list
-            Time indices or interpolation args (ib, ia, wts)
-        nodes : np.ndarray
-            Node indices of nearest spatial neighbors
+        output_path : str, optional
+            If provided, writes collocated output to this NetCDF file path.
 
         Returns
         -------
-        Tuple[np.ndarray, np.ndarray]
-            Extracted model values and node depths
+        xarray.Dataset
+            Dataset containing collocated observation and model data.
+        
+        Raises
+        ------
+        TypeError
+            If the observation object type does not match the collocation type
+            (e.g., using ArgoData for '2D' collocation).
+        NotImplementedError
+            If the 'var_type' is not recognized.
         """
-        model_data = m_var.values
-        depths = self.model.mesh_depth
-        values, dpts = [], []
-
-        # Find the node dimension name (e.g., 'node' or 'nSCHISM_hgrid_node')
-        node_dim = None
-        for dim in m_var.dims:
-            if dim != 'time':
-                node_dim = dim
-                break
-
-        if node_dim is None:
-            raise ValueError("Could not find a spatial node dimension in model variable.")
-
-
-        if self.temporal_interp:
-            ib, ia, wts = times_or_inds
-            for i, nd in enumerate(nodes):
-                v0 = model_data[ib[i], nd]
-                v1 = model_data[ia[i], nd]
-                values.append(v0 * (1 - wts[i]) + v1 * wts[i])
-                dpts.append(depths[nd])
+        if self.collocation_type in ['2D', '3D_Surface']:
+            if not isinstance(self.obs, SatelliteData):
+                raise TypeError("2D/3D_Surface collocation requires SatelliteData observation type.")
+            _logger.info("Starting 2D/Surface collocation...")
+            return self._run_surface_collocation(output_path)
+        
+        elif self.collocation_type == '3D_Profile':
+            if not isinstance(self.obs, ArgoData):
+                raise TypeError("3D_Profile collocation requires ArgoData observation type.")
+            
+            if self.search_radius is not None:
+                _logger.warning("Radius search is not yet supported for 3D_Profile, "
+                                "using n_nearest=4 (default) instead.")
+                self.n_nearest = 4 # Default for 3D
+            
+            _logger.info("Starting 3D Profile collocation...")
+            return self._run_profile_collocation(output_path)
+        
         else:
-            for i, (t_idx, nd) in enumerate(zip(times_or_inds, nodes)):
-                t = m_var["time"].values[t_idx]
-                values.append(m_var.sel(time=t, **{node_dim: nd}).values)
-                dpts.append(depths[nd])
+            raise NotImplementedError(f"Collocation type {self.collocation_type} not supported.")
 
-        # Handle the N=0 case
-        if not values:
-            k = nodes.shape[1] if nodes.ndim == 2 else 0
-            return np.empty((0, k)), np.empty((0, k))
-
-        return np.array(values), np.array(dpts)
-
-    def _coast_distance(self,
-                        lats: np.ndarray,
-                        lons: np.ndarray) -> np.ndarray:
+    def _run_surface_collocation(self, output_path: Optional[str] = None) -> xr.Dataset:
         """
-        Get distance to coast for given lat/lon points using optional dataset.
+        Run the collocation process for 2D/surface variables.
+
+        This method iterates over each model file, finds all satellite
+        observations within the time window, and performs 2D spatial
+        collocation (horizontal only).
 
         Parameters
         ----------
-        lats : array-like
-            Latitudes of satellite observations
-        lons : array-like
-            Longitudes of satellite observations
+        output_path : str, optional
+            If provided, writes collocated output to this NetCDF file path.
+
+        Returns
+        -------
+        xarray.Dataset
+            Dataset containing collocated 2D satellite and model data.
+        """
+        # --- Make variable names generic ---
+        model_var_name = self.model.model_dict['var']
+        # Map model var to obs var (assuming SatelliteData)
+        obs_var_map = {'sigWaveHeight': 'swh'} 
+        obs_var_name = obs_var_map.get(model_var_name, 'swh') # Default to 'swh'
+        
+        # Generic results dictionary
+        results = {k: [] for k in [
+            "time_obs", "lat_obs", "lon_obs", "source_obs",
+            f"obs_{obs_var_name}", "obs_sla", f"model_{model_var_name}", "model_dpt",
+            "dist_deltas", "node_ids", "time_deltas",
+            f"model_{model_var_name}_weighted", "bias_raw", "bias_weighted"
+        ]}
+        
+        # Remove keys for optional obs variables if not present
+        if 'swh' not in self.obs.ds:
+             results.pop(f"obs_{obs_var_name}", None)
+        if 'sla' not in self.obs.ds:
+             results.pop("obs_sla", None)
+        if 'source' not in self.obs.ds:
+             results.pop("source_obs", None)
+        # --- End generic names ---
+
+        include_coast = self.dist_coast is not None
+        if include_coast:
+            results["dist_coast"] = []
+
+        for path in tqdm(self.model.files, desc="Collocating Surface..."):
+            m_var = self.model.load_variable(path)
+            m_times = m_var["time"].values
+
+            if self.temporal_interp:
+                obs_sub, ib, ia, wts, tdel = temporal_interpolated(self.obs.ds,
+                                                                   m_times,
+                                                                   self.time_buffer,
+                                                                   self.obs_time_coord)
+                time_args = (ib, ia, wts)
+            else:
+                obs_sub, idx, tdel = temporal_nearest(self.obs.ds,
+                                                      m_times,
+                                                      self.time_buffer,
+                                                      self.obs_time_coord)
+                time_args = idx
+
+            if obs_sub.time.size == 0:
+                _logger.debug(f"No satellite data for file {path}, skipping.")
+                continue
+
+            if self.search_radius is not None:
+                spatial = self._collocate_with_radius(obs_sub, m_var, time_args)
+            else:
+                spatial = self._collocate_with_nearest(obs_sub, m_var, time_args)
+
+            # Append generic results
+            results["time_obs"].append(obs_sub[self.obs_time_coord].values)
+            results["lat_obs"].append(obs_sub["lat"].values)
+            results["lon_obs"].append(obs_sub["lon"].values)
+            results["time_deltas"].append(tdel)
+
+            if "source_obs" in results:
+                results["source_obs"].append(obs_sub["source"].values)
+            if f"obs_{obs_var_name}" in results:
+                results[f"obs_{obs_var_name}"].append(obs_sub[obs_var_name].values)
+            if "obs_sla" in results:
+                results["obs_sla"].append(obs_sub["sla"].values)
+            
+            results[f"model_{model_var_name}"].append(spatial["model_var"])
+            results["model_dpt"].append(spatial["model_dpt"])
+            results["dist_deltas"].append(spatial["dist_deltas"])
+            results["node_ids"].append(spatial["node_ids"])
+            results[f"model_{model_var_name}_weighted"].append(spatial["model_var_weighted"])
+            results["bias_raw"].append(spatial["bias_raw"])
+            results["bias_weighted"].append(spatial["bias_weighted"])
+
+            if include_coast:
+                coast_d = self._coast_distance(obs_sub["lat"].values, obs_sub["lon"].values)
+                results["dist_coast"].append(coast_d)
+
+        n_neighbors = None if self.search_radius is not None else self.n_nearest
+        ds_out = make_collocated_nc_2d(results, n_neighbors, model_var_name, obs_var_name)
+        
+        if output_path:
+            ds_out.to_netcdf(output_path)
+        return ds_out
+
+    def _run_profile_collocation(self, output_path: Optional[str] = None) -> xr.Dataset:
+        """
+        Run the full 3D profile collocation.
+
+        This method operates on the single, pre-loaded 3D model dataset.
+        It performs temporal, spatial (horizontal), and vertical
+        collocation for each Argo profile.
+
+        Parameters
+        ----------
+        output_path : str, optional
+            If provided, writes collocated output to this NetCDF file path.
+
+        Returns
+        -------
+        xarray.Dataset
+            Dataset containing collocated 3D profile data.
+        """
+        print(">>> RUNNING NEW 3D PROFILE COLLOCATION METHOD <<<")
+        m_times = self.model_data["time"].values
+        
+        _logger.info("Performing temporal collocation...")
+        if self.temporal_interp:
+            argo_sub, ib, ia, wts, tdel = temporal_interpolated(self.obs.ds,
+                                                               m_times,
+                                                               self.time_buffer,
+                                                               self.obs_time_coord)
+            time_args = (ib, ia, wts)
+        else:
+            argo_sub, idx, tdel = temporal_nearest(self.obs.ds,
+                                                   m_times,
+                                                   self.time_buffer,
+                                                   self.obs_time_coord)
+            time_args = idx
+
+        if argo_sub[self.obs_time_coord].size == 0:
+            _logger.warning("No Argo data found within model time range. Returning empty dataset.")
+            return xr.Dataset()
+
+        _logger.info("Performing spatial collocation (finding nearest nodes)...")
+        lons = argo_sub["LONGITUDE"].values
+        lats = argo_sub["LATITUDE"].values
+        heights = np.zeros_like(lons) # Argo floats are at sea level
+
+        dists, nodes = self.locator.query_nearest(
+            lons, lats, heights, k=self.n_nearest
+        )
+        
+        _logger.info("Performing vertical collocation (interpolating profiles)...")
+        
+        # Get variable names from model_dict
+        main_var = self.model.model_dict['var']
+        zcor_var = self.model.model_dict['zcor_var']
+        
+        # Map model var name to argo var name
+        obs_var_map = {'temperature': 'temp', 'salinity': 'psal'}
+        obs_var = obs_var_map.get(main_var)
+        if obs_var is None:
+            raise ValueError(f"No Argo variable mapping for model var '{main_var}'")
+
+        # Get max vertical levels from Argo data for padding
+        max_levels = self.obs.ds.sizes['N_LEVELS']
+        
+        # Call the correct V-H (Vertical-then-Horizontal) extractor
+        v_data = self._extract_model_profiles_3d(
+            argo_sub=argo_sub,
+            time_args=time_args,
+            nodes=nodes,
+            dists=dists,
+            model_var_name=main_var,
+            model_zcor_name=zcor_var,
+            obs_var_name=obs_var,
+            max_levels=max_levels
+        )
+
+        _logger.info("Assembling final dataset...")
+        results = {
+            "time": argo_sub[self.obs_time_coord].values,
+            "lat": argo_sub["LATITUDE"].values,
+            "lon": argo_sub["LONGITUDE"].values,
+            "time_deltas": tdel,
+            "dist_deltas": dists,
+            "node_ids": nodes,
+            
+            "argo_depth": v_data["obs_depth"],
+            f"argo_{obs_var}": v_data["obs_var"],
+            f"model_{main_var}": v_data["model_var_interp"],
+        }
+        
+        ds_out = make_collocated_nc_3d(results, max_levels)
+        
+        if output_path:
+            ds_out.to_netcdf(output_path)
+        return ds_out
+
+    def _extract_model_profiles_3d(self,
+                                   argo_sub: xr.Dataset,
+                                   time_args: tuple,
+                                   nodes: np.ndarray,
+                                   dists: np.ndarray,
+                                   model_var_name: str,
+                                   model_zcor_name: str,
+                                   obs_var_name: str,
+                                   max_levels: int
+                                   ) -> dict:
+        """
+        Extracts and collocates 3D model profiles onto Argo vertical levels.
+
+        This performs the "vertical-then-horizontal" interpolation:
+        1. Temporal interpolation of model data (if enabled) at each nearest node.
+        2. Vertical interpolation at *each* nearest node onto the Argo depth levels.
+        3. Spatial inverse-distance-weighting of the vertically collocated profiles.
+
+        Parameters
+        ----------
+        argo_sub : xr.Dataset
+            The subset of Argo profiles to collocate.
+        time_args : tuple or np.ndarray
+            Temporal indices or interpolation arguments.
+        nodes : np.ndarray
+            Array of nearest node indices, shape (n_profiles, k_nearest).
+        dists : np.ndarray
+            Array of distances to nearest nodes, shape (n_profiles, k_nearest).
+        model_var_name : str
+            The name of the main model variable (e.g., 'temperature').
+        model_zcor_name : str
+            The name of the model z-coordinate variable (e.g., 'zCoordinates').
+        obs_var_name : str
+            The name of the main observation variable (e.g., 'temp').
+        max_levels : int
+            The maximum number of vertical levels for padding the output arrays.
+
+        Returns
+        -------
+        dict
+            A dictionary containing the padded, collocated profiles:
+            - "obs_depth": (n_profiles, max_levels)
+            - "obs_var": (n_profiles, max_levels)
+            - "model_var_interp": (n_profiles, max_levels)
+        """
+        
+        # Get spatial weights (shape: [n_profiles, k_nearest])
+        spatial_weights = inverse_distance_weights(dists, self.weight_power)
+        
+        n_profiles = argo_sub[self.obs_time_coord].size
+        
+        # Create empty arrays to store final profiles
+        out_obs_depth = np.full((n_profiles, max_levels), np.nan)
+        out_obs_var = np.full((n_profiles, max_levels), np.nan)
+        out_model_var = np.full((n_profiles, max_levels), np.nan)
+
+        # Get all Argo data from properties (fast)
+        argo_all_pres = self.obs.pres # e.g., self.obs.ds.PRES_ADJUSTED.values
+        argo_all_var = getattr(self.obs, obs_var_name) # e.g., self.obs.temp
+        argo_all_lats = self.obs.lat
+
+        # Get all Model data (already in memory)
+        model_all_var = self.model_data[model_var_name]
+        model_all_zcor = self.model_data[model_zcor_name]
+        
+        for i in tqdm(range(n_profiles), desc="Vertical Collocation"):
+            # --- 1. Get this Argo Profile's data ---
+            argo_pres_i = argo_all_pres[i, :]
+            argo_lat_i = argo_all_lats[i]
+            
+            # Convert pressure (dbar) to depth (meters)
+            if _HAS_GSW:
+                # gsw.z_from_p returns negative depth (meters)
+                argo_depth = gsw.z_from_p(argo_pres_i, argo_lat_i)
+            else:
+                argo_depth = argo_pres_i * -1.0197 # Approx. dbar -> meters
+            
+            argo_var_i = argo_all_var[i, :]
+            
+            # Find valid (non-NaN) levels for this profile
+            valid_argo = ~np.isnan(argo_depth) & ~np.isnan(argo_var_i)
+            if not np.any(valid_argo):
+                continue # Skip profile if it has no valid data
+                
+            argo_depth_valid = argo_depth[valid_argo]
+            argo_var_valid = argo_var_i[valid_argo]
+            
+            # Sort Argo data by depth (ascending) for interpolation
+            sort_idx_argo = np.argsort(argo_depth_valid)
+            argo_depth_sorted = argo_depth_valid[sort_idx_argo]
+            argo_var_sorted = argo_var_valid[sort_idx_argo]
+            n_valid_levels = len(argo_depth_sorted)
+            
+            # Store the original, sorted, un-interpolated data (padded)
+            out_obs_depth[i, :n_valid_levels] = argo_depth_sorted
+            out_obs_var[i, :n_valid_levels] = argo_var_sorted
+
+            # --- 2. Get Model Data (Temporal Interp) ---
+            node_indices = nodes[i, :] # Shape: [k_nearest]
+            
+            if self.temporal_interp:
+                ib, ia, wts = time_args
+                t_idx_b, t_idx_a, t_wt = ib[i], ia[i], wts[i]
+                
+                # Get data at all k nodes, for time_b and time_a
+                zcor_b = model_all_zcor.isel(time=t_idx_b, nSCHISM_hgrid_node=node_indices).values
+                zcor_a = model_all_zcor.isel(time=t_idx_a, nSCHISM_hgrid_node=node_indices).values
+                var_b = model_all_var.isel(time=t_idx_b, nSCHISM_hgrid_node=node_indices).values
+                var_a = model_all_var.isel(time=t_idx_a, nSCHISM_hgrid_node=node_indices).values
+                
+                # Perform temporal interpolation
+                model_zcor_at_nodes = zcor_b * (1 - t_wt) + zcor_a * t_wt
+                model_var_at_nodes = var_b * (1 - t_wt) + var_a * t_wt
+            
+            else: # Temporal nearest
+                t_idx = time_args[i]
+                model_zcor_at_nodes = model_all_zcor.isel(time=t_idx, nSCHISM_hgrid_node=node_indices).values
+                model_var_at_nodes = model_all_var.isel(time=t_idx, nSCHISM_hgrid_node=node_indices).values
+            
+            # model_zcor_at_nodes shape: [k_nearest, n_model_levels]
+
+            # --- 3. Vertical-then-Horizontal Interpolation ---
+            
+            # Array to hold the vertically interpolated profile from *each* node
+            model_profiles_at_argo_depths = np.full((self.n_nearest, n_valid_levels), np.nan)
+            
+            for k in range(self.n_nearest):
+                # Get the k-th node's profile
+                model_zcor_k = model_zcor_at_nodes[k, :]
+                model_var_k = model_var_at_nodes[k, :]
+
+                # Clean NaNs (as you showed in your example)
+                valid_model = ~np.isnan(model_zcor_k) & ~np.isnan(model_var_k)
+                if not np.any(valid_model):
+                    continue # This node is dry or has no data
+
+                model_zcor_k_valid = model_zcor_k[valid_model]
+                model_var_k_valid = model_var_k[valid_model]
+
+                # Sort model profile by depth (zcor) for interpolation
+                sort_idx_model = np.argsort(model_zcor_k_valid)
+                model_zcor_k_sorted = model_zcor_k_valid[sort_idx_model]
+                model_var_k_sorted = model_var_k_valid[sort_idx_model]
+                
+                # Interpolate this node's model values onto the Argo depth levels
+                model_profile_k_interp = np.interp(
+                    argo_depth_sorted,      # Argo z-levels (target)
+                    model_zcor_k_sorted,    # Model z-levels (node k)
+                    model_var_k_sorted,     # Model var (node k)
+                    left=np.nan, right=np.nan # Extrapolate as NaN
+                )
+                
+                model_profiles_at_argo_depths[k, :] = model_profile_k_interp
+
+            # --- 4. Spatial IDW ---
+            # Now we have shape [k_nearest, n_valid_levels]
+            # We can spatially average this
+            weights_i = spatial_weights[i, :] # Shape: [k_nearest]
+            
+            with np.errstate(invalid='ignore'): # Suppress warnings for all-NaN slices
+                # Transpose to (n_valid_levels, k_nearest)
+                profiles_T = model_profiles_at_argo_depths.T
+                
+                # Weighted sum
+                final_model_profile = np.nansum(profiles_T * weights_i, axis=1)
+                
+                # Normalize weights where we have valid data
+                norm_weights = np.nansum(
+                    (~np.isnan(profiles_T)) * weights_i, axis=1
+                )
+                norm_weights[norm_weights == 0] = np.nan
+                final_model_profile = final_model_profile / norm_weights
+            
+            # Store the final collocated model profile (padded)
+            out_model_var[i, :n_valid_levels] = final_model_profile
+
+        return {
+            "obs_depth": out_obs_depth,
+            "obs_var": out_obs_var,
+            "model_var_interp": out_model_var
+        }
+
+    def _get_obs_height(self, obs_sub: xr.Dataset) -> np.ndarray:
+        """
+        Extracts observation height/altitude from the dataset.
+
+        Defaults to 0m (sea level) if not found, which is
+        appropriate for Argo floats or satellites without height data.
+
+        Parameters
+        ----------
+        obs_sub : xr.Dataset
+            The subset of observation data.
 
         Returns
         -------
         np.ndarray
-            Interpolated coastal distances, or NaNs if unavailable
+            An array of observation heights.
         """
-        if self.dist_coast is None:
-            return np.full_like(lats, fill_value=np.nan, dtype=float)
-        return self.dist_coast.sel(
-            latitude=xr.DataArray(lats, dims="points"),
-            longitude=xr.DataArray(lons, dims="points"),
-            method="nearest",
-        ).values
+        # For Satellite
+        if 'height' in obs_sub:
+            return obs_sub["height"].values
+        if 'altitude' in obs_sub:
+            return obs_sub["altitude"].values
 
-    def _get_sat_height(self, sat_sub: xr.Dataset) -> np.ndarray:
-        """
-        Extracts satellite height/altitude from the dataset.
-        Defaults to 0m with a warning if not found.
-        """
-        if 'height' in sat_sub:
-            return sat_sub["height"].values
-        if 'altitude' in sat_sub:
-            return sat_sub["altitude"].values
+        # For ArgoData
+        if isinstance(self.obs, ArgoData):
+            return np.zeros_like(obs_sub["LONGITUDE"].values)
 
-        _logger.warning("No 'height' or 'altitude' in satellite data. "
-                       "Defaulting to 0m for geocentric query. "
-                       "This may be inaccurate for altimeter data.")
-        return np.zeros_like(sat_sub["lon"].values)
+        _logger.warning("No 'height' or 'altitude' in obs data. "
+                        "Defaulting to 0m for geocentric query.")
+        # Fallback for SatelliteData without height
+        try:
+            return np.zeros_like(obs_sub["lon"].values)
+        except KeyError: # Fallback for ArgoData if it got here
+             return np.zeros_like(obs_sub["LONGITUDE"].values)
 
-    def _collocate_with_radius(self, sat_sub, m_var, time_args):
+
+    def _collocate_with_radius(self, obs_sub, m_var, time_args):
         """
-        Collocate satellite observations with model output using a spatial search radius.
-        This is more challendi
+        Perform 2D collocation using a spatial search radius.
 
         Parameters
         ----------
-        - sat_sub (xarray.Dataset): Subset of satellite data.
-        - m_var (str): Model variable name (e.g., 'sigWaveHeight').
-        - time_args (tuple or list): Time interpolation arguments or time indices.
+        obs_sub : xarray.Dataset
+            Subset of satellite observations to collocate.
+        m_var : xarray.DataArray
+            Model variable data for the current time slice.
+        time_args : tuple or np.ndarray
+            Temporal indices or interpolation arguments.
 
         Returns
         -------
-        - dict: A dictionary containing collocated model variables:
-            * model_swh: 2D array [obs, nearest_nodes]
-            * model_dpt: 2D array [obs, nearest_nodes]
-            * dist_deltas: 2D array [obs, nearest_nodes] (distances)
-            * node_ids: 2D array [obs, nearest_nodes]
-            * model_swh_weighted: 1D array of weighted model SWH [obs]
-            * bias_raw: 1D array of unweighted biases [obs]
-            * bias_weighted: 1D array of weighted biases [obs]
-
-        Notes
-        -----
-        Padding is applied to all per-observation arrays to ensure they can be stacked into
-        uniform 2D arrays, even though the number of nearest model nodes may differ per observation.
-        This ensures consistent array dimensions and enables construction of an xarray.Dataset later
-        dimension mismatches.
+        dict
+            Dictionary containing 2D collocated arrays (e.g., "model_var", "dist_deltas").
         """
-        lons = sat_sub["lon"].values
-        lats = sat_sub["lat"].values
-        heights = self._get_sat_height(sat_sub)
+        
+        obs_var_map = {'sigWaveHeight': 'swh'}
+        model_var_name = self.model.model_dict['var']
+        obs_var_name = obs_var_map.get(model_var_name, 'swh')
+        
+        lons = obs_sub["lon"].values
+        lats = obs_sub["lat"].values
+        heights = self._get_obs_height(obs_sub)
 
         all_dists, all_nodes = self.locator.query_radius(
             lons, lats, heights, radius_m=self.search_radius
         )
-
+        
         flat_nodes = []
         flat_ib, flat_ia, flat_wt = [], [], []
         obs_lens = []
@@ -255,7 +648,7 @@ class Collocate:
         for i, (nodes, dists) in enumerate(zip(all_nodes, all_dists)):
             obs_lens.append(len(nodes))
             if len(nodes) == 0:
-                continue  # no nodes found — handled after extraction
+                continue 
 
             if self.temporal_interp:
                 ib, ia, wts = time_args
@@ -263,7 +656,7 @@ class Collocate:
                 flat_ia.extend([ia[i]] * len(nodes))
                 flat_wt.extend([wts[i]] * len(nodes))
             else:
-                flat_ib.extend([time_args[i]] * len(nodes))  # just time index
+                flat_ib.extend([time_args[i]] * len(nodes)) 
 
             flat_nodes.extend(nodes)
 
@@ -272,11 +665,11 @@ class Collocate:
             n_obs = len(lons)
             nan_arr = np.full((n_obs, 1), np.nan)
             return {
-                "model_swh": nan_arr,
+                "model_var": nan_arr,
                 "model_dpt": nan_arr,
                 "dist_deltas": nan_arr,
                 "node_ids": nan_arr,
-                "model_swh_weighted": np.full(n_obs, np.nan),
+                "model_var_weighted": np.full(n_obs, np.nan),
                 "bias_raw": np.full(n_obs, np.nan),
                 "bias_weighted": np.full(n_obs, np.nan),
             }
@@ -311,59 +704,52 @@ class Collocate:
                 np.pad(a, (0, max_len - len(a)), constant_values=np.nan) for a in arrs
             ])
 
-        # Generate weights and weighted values
         weights_list = [inverse_distance_weights(d[None, :], self.weight_power)[0]
                         if len(d) > 0 else np.array([np.nan])
                         for d in split_dists]
 
-        weighted_vals = [np.sum(v * w) if len(v) > 0 else np.nan
-                        for v, w in zip(split_vals, weights_list)]
+        weighted_vals = [np.nansum(v * w) if len(v) > 0 else np.nan
+                         for v, w in zip(split_vals, weights_list)]
 
         return {
-            "model_swh": pad(split_vals),
+            "model_var": pad(split_vals),
             "model_dpt": pad(split_dpts),
             "dist_deltas": pad(split_dists),
             "node_ids": pad([a.astype(float) for a in split_nodes]),
-            "model_swh_weighted": np.array(weighted_vals),
+            "model_var_weighted": np.array(weighted_vals),
             "bias_raw": np.array([
                 np.nanmean(v) - s if len(v) > 0 else np.nan
-                for v, s in zip(split_vals, sat_sub["swh"].values)
+                for v, s in zip(split_vals, obs_sub[obs_var_name].values)
             ]),
-            "bias_weighted": np.array(weighted_vals) - sat_sub["swh"].values,
+            "bias_weighted": np.array(weighted_vals) - obs_sub[obs_var_name].values,
         }
 
-    def _collocate_with_nearest(self, sat_sub, m_var, time_args):
+    def _collocate_with_nearest(self, obs_sub, m_var, time_args):
         """
-        Perform collocation using nearest-neighbor spatial search.
-
-        For each satellite observation, find a fixed number of nearest model nodes,
-        extract model values at relevant times (interpolated or nearest),
-        compute inverse-distance weights, and calculate weighted averages.
+        Perform 2D collocation using k-nearest spatial search.
 
         Parameters
         ----------
-        sat_sub : xarray.Dataset
+        obs_sub : xarray.Dataset
             Subset of satellite observations to collocate.
         m_var : xarray.DataArray
             Model variable data for the current time slice.
         time_args : tuple or np.ndarray
-            Temporal indices or interpolation arguments depending on temporal method.
+            Temporal indices or interpolation arguments.
 
         Returns
         -------
         dict
-            Dictionary containing arrays for:
-            - model_swh: model values per neighbor and observation
-            - model_dpt: node depths
-            - dist_deltas: distances to neighbors
-            - node_ids: spatial node indices
-            - model_swh_weighted: weighted model values per observation
-            - bias_raw: difference between mean model and satellite values
-            - bias_weighted: difference between weighted model and satellite values
+            Dictionary containing 2D collocated arrays (e.g., "model_var", "dist_deltas").
         """
-        lons = sat_sub["lon"].values
-        lats = sat_sub["lat"].values
-        heights = self._get_sat_height(sat_sub)
+
+        obs_var_map = {'sigWaveHeight': 'swh'}
+        model_var_name = self.model.model_dict['var']
+        obs_var_name = obs_var_map.get(model_var_name, 'swh')
+        
+        lons = obs_sub["lon"].values
+        lats = obs_sub["lat"].values
+        heights = self._get_obs_height(obs_sub)
 
         dists, nodes = self.locator.query_nearest(
             lons, lats, heights, k=self.n_nearest
@@ -374,86 +760,117 @@ class Collocate:
         weighted = (m_vals * weights).sum(axis=1)
 
         return {
-            "model_swh": m_vals,
+            "model_var": m_vals,
             "model_dpt": m_dpts,
             "dist_deltas": dists,
             "node_ids": nodes,
-            "model_swh_weighted": weighted,
-            "bias_raw": m_vals.mean(axis=1) - sat_sub["swh"].values,
-            "bias_weighted": weighted - sat_sub["swh"].values,
+            "model_var_weighted": weighted,
+            "bias_raw": m_vals.mean(axis=1) - obs_sub[obs_var_name].values,
+            "bias_weighted": weighted - obs_sub[obs_var_name].values,
         }
 
-    def run(self,
-            output_path: Optional[str] = None) -> xr.Dataset:
+    def _extract_model_values(self,
+                              m_var: xr.DataArray,
+                              times_or_inds: Union[np.ndarray,
+                                                   Tuple[np.ndarray,
+                                                         np.ndarray,
+                                                         np.ndarray]],
+                              nodes: np.ndarray) -> Tuple[np.ndarray,
+                                                           np.ndarray]:
         """
-        Run the full model–satellite collocation process over all model files.
-
-        This function iterates over all model output files, performs temporal and spatial
-        collocation of satellite data with model results, calculates weighted averages,
-        biases, and optionally writes the collocated results to a NetCDF file.
+        Extract model variable values and corresponding depths at given times and nodes.
+        (Used by 2D/Surface collocation)
 
         Parameters
         ----------
-        output_path : str, optional
-            If provided, writes collocated output to NetCDF file
+        m_var : xarray.DataArray
+            Model variable to extract from (e.g. significant wave height)
+        times_or_inds : tuple or list
+            Time indices or interpolation args (ib, ia, wts)
+        nodes : np.ndarray
+            Node indices of nearest spatial neighbors (can be 1D or 2D)
 
         Returns
         -------
-        xarray.Dataset
-            Dataset containing collocated satellite and model data
+        Tuple[np.ndarray, np.ndarray]
+            Extracted model values and node depths
         """
-        results = {k: [] for k in [
-            "time_sat", "lat_sat", "lon_sat", "source_sat",
-            "sat_swh", "sat_sla", "model_swh", "model_dpt",
-            "dist_deltas", "node_ids", "time_deltas",
-            "model_swh_weighted", "bias_raw", "bias_weighted"
-        ]}
+        model_data = m_var.values
+        depths = self.model.mesh_depth
+        values, dpts = [], []
 
-        include_coast = self.dist_coast is not None
-        if include_coast:
-            results["dist_coast"] = []
+        node_dim = None
+        for dim in m_var.dims:
+            if dim != 'time':
+                node_dim = dim
+                break
+        if node_dim is None:
+            raise ValueError("Could not find a spatial node dimension in model variable.")
 
-        for path in tqdm(self.model.files, desc="Collocating..."):
-            m_var = self.model.load_variable(path)
-            m_times = m_var["time"].values
+        # Logic for radius search (nodes is 1D)
+        if self.search_radius is not None:
+             if self.temporal_interp:
+                ib, ia, wts = times_or_inds
+                for i, nd in enumerate(nodes): # nodes is flat 1D array
+                    v0 = model_data[ib[i], nd]
+                    v1 = model_data[ia[i], nd]
+                    values.append(v0 * (1 - wts[i]) + v1 * wts[i])
+                    dpts.append(depths[nd])
+             else:
+                t_idx = times_or_inds
+                for i, nd in enumerate(nodes): # nodes is flat 1D array
+                    values.append(model_data[t_idx[i], nd])
+                    dpts.append(depths[nd])
 
+        # Logic for k-nearest (nodes is 2D)
+        else:
             if self.temporal_interp:
-                sat_sub, ib, ia, wts, tdel = temporal_interpolated(self.sat.ds,
-                                                                   m_times,
-                                                                   self.time_buffer)
-                time_args = (ib, ia, wts)
+                ib, ia, wts = times_or_inds
+                # This handles nodes being shape (n_obs, k_nearest)
+                for i in range(len(ib)):
+                    nd = nodes[i]
+                    v0 = model_data[ib[i], nd]
+                    v1 = model_data[ia[i], nd]
+                    values.append(v0 * (1 - wts[i]) + v1 * wts[i])
+                    dpts.append(depths[nd])
             else:
-                sat_sub, idx, tdel = temporal_nearest(self.sat.ds, m_times, self.time_buffer)
-                time_args = idx
+                t_idx = times_or_inds
+                # This handles nodes being shape (n_obs, k_nearest)
+                for i, t_idx_i in enumerate(t_idx):
+                    nd = nodes[i]
+                    t = m_var["time"].values[t_idx_i]
+                    values.append(m_var.sel(time=t, **{node_dim: nd}).values)
+                    dpts.append(depths[nd])
 
-            if self.search_radius is not None:
-                spatial = self._collocate_with_radius(sat_sub, m_var, time_args)
-            else:
-                spatial = self._collocate_with_nearest(sat_sub, m_var, time_args)
+        if not values:
+            k = nodes.shape[1] if nodes.ndim == 2 else 0
+            return np.empty((0, k)), np.empty((0, k))
+        
+        return np.array(values), np.array(dpts)
 
-            results["time_sat"].append(sat_sub["time"].values)
-            results["lat_sat"].append(sat_sub["lat"].values)
-            results["lon_sat"].append(sat_sub["lon"].values)
-            results["source_sat"].append(sat_sub["source"].values)
-            results["sat_swh"].append(sat_sub["swh"].values)
-            results["sat_sla"].append(sat_sub["sla"].values)
-            results["time_deltas"].append(tdel)
 
-            for k in ["model_swh",
-                      "model_dpt",
-                      "dist_deltas",
-                      "node_ids",
-                      "model_swh_weighted",
-                      "bias_raw",
-                      "bias_weighted"]:
-                results[k].append(spatial[k])
+    def _coast_distance(self,
+                          lats: np.ndarray,
+                          lons: np.ndarray) -> np.ndarray:
+        """
+        Get distance to coast for given lat/lon points using optional dataset.
 
-            if include_coast:
-                coast_d = self._coast_distance(sat_sub["lat"].values, sat_sub["lon"].values)
-                results["dist_coast"].append(coast_d)
+        Parameters
+        ----------
+        lats : array-like
+            Latitudes of satellite observations
+        lons : array-like
+            Longitudes of satellite observations
 
-        n_neighbors = None if self.search_radius is not None else self.n_nearest
-        ds_out = make_collocated_nc(results, n_neighbors)
-        if output_path:
-            ds_out.to_netcdf(output_path)
-        return ds_out
+        Returns
+        -------
+        np.ndarray
+            Interpolated coastal distances, or NaNs if unavailable
+        """
+        if self.dist_coast is None:
+            return np.full_like(lats, fill_value=np.nan, dtype=float)
+        return self.dist_coast.sel(
+            latitude=xr.DataArray(lats, dims="points"),
+            longitude=xr.DataArray(lons, dims="points"),
+            method="nearest",
+        ).values

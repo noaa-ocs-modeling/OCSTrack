@@ -131,6 +131,23 @@ class SCHISM:
         missing = [k for k in required_keys if k not in self.model_dict]
         if missing:
             raise ValueError(f"Missing keys in model_dict: {missing}")
+            
+        valid_types = ['2D', '3D_Surface', '3D_Profile']
+        var_type = self.model_dict['var_type']
+        
+        if var_type not in valid_types:
+            raise ValueError(
+                f"var_type must be one of {valid_types}, "
+                f"but got '{var_type}'"
+            )
+        
+        if var_type == '3D_Profile':
+            profile_keys = ['zcor_var', 'zcor_startswith']
+            missing_profile = [k for k in profile_keys if k not in self.model_dict]
+            if missing_profile:
+                raise ValueError(
+                    f"For '3D_Profile', model_dict must also include: {missing_profile}"
+                )
 
     def _select_model_files(self) -> List[str]:
         """
@@ -191,7 +208,7 @@ class SCHISM:
         Returns
         -------
         xr.DataArray
-            The requested variable, surface-only if 3D
+            The requested variable, , surface-only if var_type is '3D_Surface'
 
         Notes
         -----
@@ -200,9 +217,99 @@ class SCHISM:
         _logger.info("Opening model file: %s", path)
         with xr.open_dataset(path) as ds:
             var = ds[self.model_dict['var']]
-            if self.model_dict['var_type'] == '3D':
+            
+            # Check for the new '3D_Surface' type
+            if self.model_dict.get('var_type') == '3D_Surface':
+                _logger.info("Extracting surface layer from 3D variable.")
                 var = var.isel(nSCHISM_vgrid_layers=-1)
         return var
+
+    def load_3d_data(self) -> xr.Dataset:
+        """
+        Loads the full 3D model variable and its vertical coordinates by
+        finding, pairing, and merging the separate variable and z-coordinate
+        files for each time step.
+
+        This method is intended for 3D profile collocation (e.g., with Argo)
+        and is called when model_dict['var_type'] == '3D_Profile'.
+
+        Returns
+        -------
+        xr.Dataset
+            A single xarray Dataset containing the 3D variable (e.g., 'salt')
+            and its 'zcor' variable, concatenated across all files and
+            sliced by the instance's start_date and end_date.
+            The data is loaded into memory.
+
+        Raises
+        ------
+        ValueError
+            If no files were selected or if a matching z-coordinate
+            file cannot be found for a main variable file.
+        """
+        if not self.files:
+            _logger.warning("No files selected, cannot load 3D data.")
+            raise ValueError("No model files were found for the specified time range.")
+
+        main_var = self.model_dict['var']
+        main_startswith = self.model_dict['startswith']
+        
+        zcor_var = self.model_dict['zcor_var']
+        zcor_startswith = self.model_dict['zcor_startswith']
+        
+        _logger.info(f"Pairing and loading 3D data for {main_var} and {zcor_var}...")
+
+        datasets_to_concat = []
+        for f_main_path in self.files:
+            f_main_name = os.path.basename(f_main_path)
+            
+            # Construct the zcor filename from the main var filename
+            # e.g., "temperature_84.nc" -> "zCoordinates_84.nc"
+            file_suffix = f_main_name[len(main_startswith):]
+            f_zcor_name = f"{zcor_startswith}{file_suffix}"
+            f_zcor_path = os.path.join(self.output_dir, f_zcor_name)
+            
+            if not os.path.exists(f_zcor_path):
+                _logger.error(f"Cannot find matching zcor file for {f_main_path}")
+                _logger.error(f"Looked for: {f_zcor_path}")
+                raise ValueError(f"Missing zcor file: {f_zcor_name}")
+
+            # Open both files and merge them
+            try:
+                ds_main = xr.open_dataset(f_main_path, engine='netcdf4')
+                ds_zcor = xr.open_dataset(f_zcor_path, engine='netcdf4')
+
+                # Keep only the essential variables
+                ds_main = ds_main[[main_var]]
+                ds_zcor = ds_zcor[[zcor_var]]
+
+                # Merge. Xarray aligns them using the 'time' coordinate.
+                ds_merged = xr.merge([ds_main, ds_zcor])
+                datasets_to_concat.append(ds_merged)
+            
+            except Exception as e:
+                _logger.error(f"Error opening/merging {f_main_path} and {f_zcor_path}: {e}")
+                raise
+
+        # Now we can concatenate all the merged datasets along time
+        _logger.info(f"Concatenating {len(datasets_to_concat)} merged datasets...")
+        try:
+            ds = xr.concat(datasets_to_concat, dim="time")
+        except Exception as e:
+            _logger.error(f"Failed to concatenate merged datasets: {e}")
+            raise
+
+        _logger.info("Slicing combined dataset to requested time range...")
+        time_slice = slice(self.start_date, self.end_date)
+        ds_sliced = ds.sel(time=time_slice)
+
+        # Load into memory for fast collocation
+        _logger.info("Loading 3D data into memory (this may take a moment)...")
+        ds_sliced.load()
+        ds.close() # Close the lazy-loaded dataset
+        _logger.info("Data loading complete.")
+
+        return ds_sliced
 
 
     @property
