@@ -6,7 +6,6 @@ import numpy as np
 import xarray as xr
 from tqdm import tqdm
 
-# --- MODIFIED IMPORTS ---
 from ocstrack.Model.model import SCHISM
 from ocstrack.Observation.satellite import SatelliteData
 from ocstrack.Observation.argofloat import ArgoData
@@ -113,7 +112,7 @@ class Collocate:
              _logger.warning("`gsw` library not found. `pip install gsw` for accurate depth conversion."
                              " Falling back to simple approximation (dbar * -1.0197).")
 
-        # --- Time buffer logic based on collocation type ---
+        # Time buffer logic based on collocation type
         if time_buffer is None:
             _logger.info("Inferring time_buffer...")
             # For 2D/Surface, load one file to get times
@@ -212,7 +211,7 @@ class Collocate:
         xarray.Dataset
             Dataset containing collocated 2D satellite and model data.
         """
-        # --- Make variable names generic ---
+        # Make variable names generic
         model_var_name = self.model.model_dict['var']
         # Map model var to obs var (assuming SatelliteData)
         obs_var_map = {'sigWaveHeight': 'swh'} 
@@ -233,7 +232,6 @@ class Collocate:
              results.pop("obs_sla", None)
         if 'source' not in self.obs.ds:
              results.pop("source_obs", None)
-        # --- End generic names ---
 
         include_coast = self.dist_coast is not None
         if include_coast:
@@ -256,7 +254,7 @@ class Collocate:
                                                       self.obs_time_coord)
                 time_args = idx
 
-            if obs_sub.time.size == 0:
+            if obs_sub[self.obs_time_coord].size == 0:
                 _logger.debug(f"No satellite data for file {path}, skipping.")
                 continue
 
@@ -315,7 +313,7 @@ class Collocate:
         xarray.Dataset
             Dataset containing collocated 3D profile data.
         """
-        print(">>> RUNNING NEW 3D PROFILE COLLOCATION METHOD <<<")
+
         m_times = self.model_data["time"].values
         
         _logger.info("Performing temporal collocation...")
@@ -373,6 +371,10 @@ class Collocate:
         )
 
         _logger.info("Assembling final dataset...")
+        include_coast = self.dist_coast is not None
+        if include_coast:
+            # lats and lons are already defined from the spatial search
+            dist_coast_values = self._coast_distance(lats, lons)
         results = {
             "time": argo_sub[self.obs_time_coord].values,
             "lat": argo_sub["LATITUDE"].values,
@@ -380,12 +382,14 @@ class Collocate:
             "time_deltas": tdel,
             "dist_deltas": dists,
             "node_ids": nodes,
-            
             "argo_depth": v_data["obs_depth"],
             f"argo_{obs_var}": v_data["obs_var"],
             f"model_{main_var}": v_data["model_var_interp"],
         }
-        
+
+        if include_coast:
+            results["dist_coast"] = dist_coast_values
+
         ds_out = make_collocated_nc_3d(results, max_levels)
         
         if output_path:
@@ -440,69 +444,64 @@ class Collocate:
         
         # Get spatial weights (shape: [n_profiles, k_nearest])
         spatial_weights = inverse_distance_weights(dists, self.weight_power)
-        
         n_profiles = argo_sub[self.obs_time_coord].size
         
-        # Create empty arrays to store final profiles
         out_obs_depth = np.full((n_profiles, max_levels), np.nan)
         out_obs_var = np.full((n_profiles, max_levels), np.nan)
         out_model_var = np.full((n_profiles, max_levels), np.nan)
 
-        # Get all Argo data from properties (fast)
-        argo_all_pres = self.obs.pres # e.g., self.obs.ds.PRES_ADJUSTED.values
-        argo_all_var = getattr(self.obs, obs_var_name) # e.g., self.obs.temp
-        argo_all_lats = self.obs.lat
+        # Get data from the argo_sub (the subset), NOT self.obs (the full dataset)
+        # Map obs_var_name ('temp') to the actual variable names
+        argo_var_name_adj = f"{obs_var_name.upper()}_ADJUSTED" # e.g., TEMP_ADJUSTED
+        argo_var_name_raw = f"{obs_var_name.upper()}"         # e.g., TEMP
+
+        argo_all_pres = argo_sub.get('PRES_ADJUSTED', argo_sub['PRES']).values
+        argo_all_var = argo_sub.get(argo_var_name_adj, argo_sub[argo_var_name_raw]).values
+        argo_all_lats = argo_sub['LATITUDE'].values
 
         # Get all Model data (already in memory)
         model_all_var = self.model_data[model_var_name]
         model_all_zcor = self.model_data[model_zcor_name]
         
         for i in tqdm(range(n_profiles), desc="Vertical Collocation"):
-            # --- 1. Get this Argo Profile's data ---
+            # profile *in the subset*.
             argo_pres_i = argo_all_pres[i, :]
             argo_lat_i = argo_all_lats[i]
             
-            # Convert pressure (dbar) to depth (meters)
             if _HAS_GSW:
-                # gsw.z_from_p returns negative depth (meters)
                 argo_depth = gsw.z_from_p(argo_pres_i, argo_lat_i)
             else:
-                argo_depth = argo_pres_i * -1.0197 # Approx. dbar -> meters
+                argo_depth = argo_pres_i * -1.0197
             
             argo_var_i = argo_all_var[i, :]
             
-            # Find valid (non-NaN) levels for this profile
             valid_argo = ~np.isnan(argo_depth) & ~np.isnan(argo_var_i)
             if not np.any(valid_argo):
-                continue # Skip profile if it has no valid data
+                continue
                 
             argo_depth_valid = argo_depth[valid_argo]
             argo_var_valid = argo_var_i[valid_argo]
             
-            # Sort Argo data by depth (ascending) for interpolation
             sort_idx_argo = np.argsort(argo_depth_valid)
             argo_depth_sorted = argo_depth_valid[sort_idx_argo]
             argo_var_sorted = argo_var_valid[sort_idx_argo]
             n_valid_levels = len(argo_depth_sorted)
             
-            # Store the original, sorted, un-interpolated data (padded)
             out_obs_depth[i, :n_valid_levels] = argo_depth_sorted
             out_obs_var[i, :n_valid_levels] = argo_var_sorted
 
-            # --- 2. Get Model Data (Temporal Interp) ---
-            node_indices = nodes[i, :] # Shape: [k_nearest]
+            # 2. Get Model Data (Temporal Interp)
+            node_indices = nodes[i, :] 
             
             if self.temporal_interp:
                 ib, ia, wts = time_args
                 t_idx_b, t_idx_a, t_wt = ib[i], ia[i], wts[i]
                 
-                # Get data at all k nodes, for time_b and time_a
                 zcor_b = model_all_zcor.isel(time=t_idx_b, nSCHISM_hgrid_node=node_indices).values
                 zcor_a = model_all_zcor.isel(time=t_idx_a, nSCHISM_hgrid_node=node_indices).values
                 var_b = model_all_var.isel(time=t_idx_b, nSCHISM_hgrid_node=node_indices).values
                 var_a = model_all_var.isel(time=t_idx_a, nSCHISM_hgrid_node=node_indices).values
                 
-                # Perform temporal interpolation
                 model_zcor_at_nodes = zcor_b * (1 - t_wt) + zcor_a * t_wt
                 model_var_at_nodes = var_b * (1 - t_wt) + var_a * t_wt
             
@@ -511,61 +510,45 @@ class Collocate:
                 model_zcor_at_nodes = model_all_zcor.isel(time=t_idx, nSCHISM_hgrid_node=node_indices).values
                 model_var_at_nodes = model_all_var.isel(time=t_idx, nSCHISM_hgrid_node=node_indices).values
             
-            # model_zcor_at_nodes shape: [k_nearest, n_model_levels]
-
-            # --- 3. Vertical-then-Horizontal Interpolation ---
-            
-            # Array to hold the vertically interpolated profile from *each* node
+            # 3. Vertical-then-Horizontal Interpolation
             model_profiles_at_argo_depths = np.full((self.n_nearest, n_valid_levels), np.nan)
             
             for k in range(self.n_nearest):
-                # Get the k-th node's profile
                 model_zcor_k = model_zcor_at_nodes[k, :]
                 model_var_k = model_var_at_nodes[k, :]
 
-                # Clean NaNs (as you showed in your example)
                 valid_model = ~np.isnan(model_zcor_k) & ~np.isnan(model_var_k)
                 if not np.any(valid_model):
-                    continue # This node is dry or has no data
+                    continue 
 
                 model_zcor_k_valid = model_zcor_k[valid_model]
                 model_var_k_valid = model_var_k[valid_model]
 
-                # Sort model profile by depth (zcor) for interpolation
                 sort_idx_model = np.argsort(model_zcor_k_valid)
                 model_zcor_k_sorted = model_zcor_k_valid[sort_idx_model]
                 model_var_k_sorted = model_var_k_valid[sort_idx_model]
                 
-                # Interpolate this node's model values onto the Argo depth levels
                 model_profile_k_interp = np.interp(
-                    argo_depth_sorted,      # Argo z-levels (target)
-                    model_zcor_k_sorted,    # Model z-levels (node k)
-                    model_var_k_sorted,     # Model var (node k)
-                    left=np.nan, right=np.nan # Extrapolate as NaN
+                    argo_depth_sorted,
+                    model_zcor_k_sorted,
+                    model_var_k_sorted,
+                    left=np.nan, right=np.nan
                 )
                 
                 model_profiles_at_argo_depths[k, :] = model_profile_k_interp
 
-            # --- 4. Spatial IDW ---
-            # Now we have shape [k_nearest, n_valid_levels]
-            # We can spatially average this
-            weights_i = spatial_weights[i, :] # Shape: [k_nearest]
+            # 4. Spatial IDW
+            weights_i = spatial_weights[i, :]
             
-            with np.errstate(invalid='ignore'): # Suppress warnings for all-NaN slices
-                # Transpose to (n_valid_levels, k_nearest)
+            with np.errstate(invalid='ignore'):
                 profiles_T = model_profiles_at_argo_depths.T
-                
-                # Weighted sum
                 final_model_profile = np.nansum(profiles_T * weights_i, axis=1)
-                
-                # Normalize weights where we have valid data
                 norm_weights = np.nansum(
                     (~np.isnan(profiles_T)) * weights_i, axis=1
                 )
                 norm_weights[norm_weights == 0] = np.nan
                 final_model_profile = final_model_profile / norm_weights
             
-            # Store the final collocated model profile (padded)
             out_model_var[i, :n_valid_levels] = final_model_profile
 
         return {

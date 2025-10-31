@@ -1,10 +1,4 @@
-""" 
-Module for handling Argo Float data.
-
-This module provides the ArgoData class for loading, preprocessing, 
-and concatenating Argo NetCDF profile files. It handles varying vertical levels,
-ensures coordinates exist, and prepares the dataset for use in collocation with models.
-"""
+""" Module for handling Argo Float data """
 
 import os
 import glob
@@ -79,7 +73,6 @@ class ArgoData:
             if 'N_LEVELS' in ds.dims:
                 max_levels = max(max_levels, ds.sizes['N_LEVELS'])
             
-            # --- START FIX: Rename JULD_LOCATION to JULD immediately ---
             # This ensures all datasets are consistent *before* concatenation
             if 'JULD' not in ds.variables and 'JULD_LOCATION' in ds.variables:
                 _logger.info(f"Renaming 'JULD_LOCATION' to 'JULD' in {f}")
@@ -87,13 +80,11 @@ class ArgoData:
             elif 'JULD' not in ds.variables:
                  _logger.warning(f"No JULD or JULD_LOCATION found in file: {f}. Skipping this file.")
                  continue # Skip this bad file
-            # --- END FIX ---
 
             datasets.append(ds)
 
-        print(f"Maximum N_LEVELS detected: {max_levels}")
+        # print(f"Maximum N_LEVELS detected: {max_levels}")
 
-        # --- (pad_to_max_levels function is unchanged) ---
         def pad_to_max_levels(ds, max_levels):
             if 'N_LEVELS' not in ds.dims:
                 return ds
@@ -131,7 +122,7 @@ class ArgoData:
             datasets, 
             dim='N_PROF', 
             combine_attrs="override",
-            join="outer"  # <-- ADDED: Ensures all vars (like JULD) are kept
+            join="outer"
         )
 
         # Ensure key variables are coordinates
@@ -139,29 +130,22 @@ class ArgoData:
             if coord in self.ds.data_vars and coord not in self.ds.coords:
                 self.ds = self.ds.set_coords(coord)
 
-        # --- RE-ORDERED LOGIC FOR ROBUSTNESS ---
-        
-        # 1. Sort by JULD first
         self.ds = self.ds.sortby('JULD')
         
-        # 2. Find and remove duplicate times
+        # Find and remove duplicate times
         _, unique_idx = np.unique(self.ds['JULD'], return_index=True)
         if len(unique_idx) < self.ds.sizes['N_PROF']:
             _logger.warning(f"Found and removed {self.ds.sizes['N_PROF'] - len(unique_idx)} duplicate time profiles.")
             self.ds = self.ds.isel(N_PROF=unique_idx)
 
-        # 3. Now it is safe to set JULD as the index
+
         self.ds = self.ds.set_index(N_PROF='JULD')
-        
-        # 4. (Optional but clean) Rename the dimension itself
         self.ds = self.ds.rename({'N_PROF': 'JULD'})
 
-        # --- END RE-ORDERED LOGIC ---
-
-        print("Argo dataset loaded successfully.")
-        print(f"Dataset dims: {self.ds.dims}")
-        print(f"Dataset coords: {list(self.ds.coords)}")
-        print(f"Dataset variables: {list(self.ds.data_vars)}")
+        # print("Argo dataset loaded successfully.")
+        # print(f"Dataset dims: {self.ds.dims}")
+        # print(f"Dataset coords: {list(self.ds.coords)}")
+        # print(f"Dataset variables: {list(self.ds.data_vars)}")
 
     @property
     def time(self):
@@ -177,11 +161,9 @@ class ArgoData:
     def lon(self, new_lon: Union[np.ndarray, list]):
         """
         Set new values for longitude.
-        (FIXED to use the new 'JULD' dimension)
         """
         if len(new_lon) != self.ds.sizes['JULD']:
              raise ValueError("New longitude array must match existing size (JULD).")
-        # Assign new values to the coordinate, using the correct dimension name
         self.ds['LONGITUDE'] = (self.ds.JULD.name, np.array(new_lon))
 
     @property
@@ -193,11 +175,9 @@ class ArgoData:
     def lat(self, new_lat: Union[np.ndarray, list]):
         """
         Set new values for latitude.
-        (FIXED to use the new 'JULD' dimension)
         """
         if len(new_lat) != self.ds.sizes['JULD']:
              raise ValueError("New latitude array must match existing size (JULD).")
-        # Assign new values to the coordinate, using the correct dimension name
         self.ds['LATITUDE'] = (self.ds.JULD.name, np.array(new_lat))
 
     @property
@@ -234,7 +214,6 @@ class ArgoData:
         Notes
         -----
         Modifies the internal dataset in-place.
-        (FIXED to use .sel() on the new 'JULD' index)
         """
         start = np.datetime64(start_date)
         end = np.datetime64(end_date)

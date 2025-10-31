@@ -21,8 +21,6 @@ from .urls import ARGO_BASE_URL
 
 _logger = logging.getLogger(__name__)
 
-# --- Helper functions ---
-
 def generate_monthly_dates(start_date_str: str,
                            end_date_str: str) -> List[tuple[str, str]]:
     """
@@ -35,6 +33,7 @@ def generate_monthly_dates(start_date_str: str,
     Returns:
         List of tuples, e.g., [('2019', '08'), ('2019', '09')]
     """
+
     start_date = datetime.strptime(start_date_str, '%Y-%m-%d').replace(day=1)
     end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
     
@@ -62,6 +61,7 @@ def _download_file(url: str, target_path: str) -> bool:
     bool
         True if download was successful, False otherwise.
     """
+
     try:
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
@@ -111,12 +111,13 @@ def download_argo_data(year: str,
     List[str]
         List of paths to the downloaded .nc files.
     """
+
     target_dir = os.path.join(raw_dir, year, month)
     os.makedirs(target_dir, exist_ok=True)
     
     start_url = f"{base_url}/{region}/{year}/{month}/"
     
-    # Create datetime objects for comparison ---
+    # Create datetime objects for comparison
     start_dt = datetime.strptime(start_date, '%Y-%m-%d')
     end_dt = datetime.strptime(end_date, '%Y-%m-%d')
     
@@ -233,6 +234,7 @@ def crop_by_box_argo(dataset: xr.Dataset,
 
     return cropped
 
+
 def crop_argo_data(file_paths: List[str],
                    cropped_dir: str,
                    lat_min: float,
@@ -267,6 +269,7 @@ def crop_argo_data(file_paths: List[str],
     end_date : str
         ISO 8601 string for end date.
     """
+
     os.makedirs(cropped_dir, exist_ok=True)
     
     DROP_VARS = [
@@ -289,10 +292,8 @@ def crop_argo_data(file_paths: List[str],
         'TEMP_ADJUSTED_ERROR','PSAL_ADJUSTED_ERROR','CYCLE_NUMBER'
     ]
 
-    # --- Create datetime objects for filtering ---
     start_dt = np.datetime64(start_date)
     end_dt = np.datetime64(end_date)
-    # ---
 
     for file_path in tqdm(file_paths, desc="Cropping Argo data"):
         try:
@@ -304,13 +305,12 @@ def crop_argo_data(file_paths: List[str],
             ) as ds_raw:
                 ds = xr.decode_cf(ds_raw, decode_coords=False) 
 
-                # --- ADDED: Time filtering step ---
+                # Time filtering
                 if not np.issubdtype(ds['JULD'].dtype, np.datetime64):
                      ds['JULD'] = xr.decode_cf(ds).JULD
                 
                 time_mask = (ds.JULD >= start_dt) & (ds.JULD <= end_dt)
                 ds_time_filtered = ds.sel(N_PROF=time_mask)
-                # --- END ADDED STEP ---
                 
                 # Pass the time-filtered dataset to the spatial crop
                 cropped = crop_by_box_argo(ds_time_filtered, lat_min, lat_max, lon_min, lon_max)
@@ -348,6 +348,7 @@ def clean_argo_data(file_paths: List[str],
     end_date : str
         ISO 8601 string for end date.
     """
+
     os.makedirs(clean_dir, exist_ok=True)
     
     DROP_VARS = [
@@ -370,8 +371,6 @@ def clean_argo_data(file_paths: List[str],
         'TEMP_ADJUSTED_ERROR','PSAL_ADJUSTED_ERROR','CYCLE_NUMBER'
     ]
 
-
-    # --- Create datetime objects for filtering ---
     start_dt = np.datetime64(start_date)
     end_dt = np.datetime64(end_date)
 
@@ -457,7 +456,7 @@ def get_argo(start_date: str,
     
     all_raw_files = []
     for year, month in tqdm(months_to_download, desc=f"Downloading {region} data"):
-        # --- Pass dates down to the downloader ---
+        # Pass dates down to the downloader
         raw_files = download_argo_data(year,
                                        month,
                                        region,

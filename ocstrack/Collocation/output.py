@@ -93,7 +93,6 @@ def make_collocated_nc_2d(results: dict,
                           ) -> xr.Dataset:
     """ 
     Format the 2D collocated data into a CF-compliant xarray Dataset.
-    (RENAMED from make_collocated_nc and made generic)
 
     Parameters
     ----------
@@ -166,7 +165,6 @@ def make_collocated_nc_2d(results: dict,
 def make_collocated_nc_3d(results: dict, max_levels: int) -> xr.Dataset:
     """
     Format the 3D collocated data into a CF-compliant xarray Dataset.
-    (NEW FUNCTION)
     
     Parameters
     ----------
@@ -202,6 +200,8 @@ def make_collocated_nc_3d(results: dict, max_levels: int) -> xr.Dataset:
         "dist_deltas": (["time", "nearest_nodes"], results["dist_deltas"]),
         "node_ids": (["time", "nearest_nodes"], results["node_ids"]),
     }
+    if "dist_coast" in results:
+        data_vars["dist_coast"] = (["time"], results["dist_coast"])
 
     ds = xr.Dataset(
         data_vars=data_vars,
