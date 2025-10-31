@@ -15,6 +15,10 @@ def lat_lon_to_cartesian_vec(latitude: np.ndarray,
     This function uses the WGS 84 ellipsoid model.
     Assumes latitude and longitude are in degrees, height in meters.
     Returns (X, Y, Z) in meters.
+
+    Notes
+    -----
+    This was suggested by Gemini as a better approximation than a perfect sphere
     """
     # WGS 84 ellipsoid parameters
     a = 6378137.0  # Semi-major axis (meters)

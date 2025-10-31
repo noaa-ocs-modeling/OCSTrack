@@ -1,3 +1,5 @@
+""" Downlaod and pre-process Satellite Altimetry data """
+
 import os
 import requests
 import logging

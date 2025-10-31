@@ -20,6 +20,7 @@ dependencies = [
     "requests",
     "netcdf4",
     "h5netcdf",
+    "dask"
 ]
 
 [project.urls]
