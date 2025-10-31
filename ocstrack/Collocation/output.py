@@ -24,7 +24,7 @@ def get_max_neighbors(result_list):
     """
     if not result_list:
         return 1
-    
+
     # Filter for valid arrays
     valid_arrs = [arr for arr in result_list if hasattr(arr, 'ndim') and arr.ndim == 2 and arr.size > 0]
     if not valid_arrs:
@@ -57,26 +57,26 @@ def pad_arrays_to_max(arrays, max_cols):
         # Handle empty lists or other non-array data
         if not hasattr(arr, 'ndim') or arr.size == 0:
              # Create an empty array with the correct 2nd dim shape
-             if hasattr(arr, 'shape') and arr.ndim == 2:
-                 padded.append(np.full((arr.shape[0], max_cols), np.nan))
-             else:
-                 padded.append(np.full((0, max_cols), np.nan))
-             continue
-        
-        if arr.ndim == 1: 
+            if hasattr(arr, 'shape') and arr.ndim == 2:
+                padded.append(np.full((arr.shape[0], max_cols), np.nan))
+            else:
+                padded.append(np.full((0, max_cols), np.nan))
+            continue
+
+        if arr.ndim == 1:
             # Ensure it's a 2D array, (n_obs, 1)
             arr = arr.reshape(-1, 1)
-            
+
         if arr.shape[1] < max_cols:
             pad_width = max_cols - arr.shape[1]
             pad_arr = np.pad(arr, ((0, 0), (0, pad_width)), constant_values=np.nan)
             padded.append(pad_arr)
         else:
             padded.append(arr[:, :max_cols])  # Truncate if larger
-    
+
     if not padded:
         return np.empty((0, max_cols))
-    
+
     try:
         return np.vstack(padded)
     except ValueError as e:
@@ -86,7 +86,7 @@ def pad_arrays_to_max(arrays, max_cols):
         raise
 
 
-def make_collocated_nc_2d(results: dict, 
+def make_collocated_nc_2d(results: dict,
                           n_nearest: int = None,
                           model_var_name: str = 'model_var',
                           obs_var_name: str = 'obs_var'
@@ -111,23 +111,22 @@ def make_collocated_nc_2d(results: dict,
     xarray.Dataset
         A CF-compliant dataset of the collocated 2D surface data.
     """
-    
+
     # Check for empty results
     if not results['time_obs']:
         _logger.warning("No collocated 2D data found. Returning empty dataset.")
         return xr.Dataset()
-    
+
     model_var_key = f"model_{model_var_name}"
     model_weighted_key = f"model_{model_var_name}_weighted"
     obs_var_key = f"obs_{obs_var_name}"
 
     # Determine max neighbors from actual data
     max_neighbors = get_max_neighbors(results[model_var_key]) if n_nearest is None else n_nearest
-    
+
     data_vars = {}
-    
     # Concatenate 1D arrays
-    for key in ["time_obs", "lat_obs", "lon_obs", "time_deltas", 
+    for key in ["time_obs", "lat_obs", "lon_obs", "time_deltas",
                 "bias_raw", "bias_weighted", model_weighted_key]:
         if key in results:
             data_vars[key] = (["time"], np.concatenate(results[key]))
@@ -138,15 +137,19 @@ def make_collocated_nc_2d(results: dict,
     if "obs_sla" in results:
         data_vars["obs_sla"] = (["time"], np.concatenate(results["obs_sla"]))
     if "source_obs" in results:
-         data_vars["source_obs"] = (["time"], np.concatenate(results["source_obs"]))
+        data_vars["source_obs"] = (["time"], np.concatenate(results["source_obs"]))
     if "dist_coast" in results:
         data_vars["dist_coast"] = (["time"], np.concatenate(results["dist_coast"]))
 
     # Pad and concatenate 2D arrays
-    data_vars[model_var_key] = (["time", "nearest_nodes"], pad_arrays_to_max(results[model_var_key], max_neighbors))
-    data_vars["model_dpt"] = (["time", "nearest_nodes"], pad_arrays_to_max(results["model_dpt"], max_neighbors))
-    data_vars["dist_deltas"] = (["time", "nearest_nodes"], pad_arrays_to_max(results["dist_deltas"], max_neighbors))
-    data_vars["node_ids"] = (["time", "nearest_nodes"], pad_arrays_to_max(results["node_ids"], max_neighbors))
+    data_vars[model_var_key] = (["time", "nearest_nodes"],
+                                pad_arrays_to_max(results[model_var_key], max_neighbors))
+    data_vars["model_dpt"] = (["time", "nearest_nodes"],
+                              pad_arrays_to_max(results["model_dpt"], max_neighbors))
+    data_vars["dist_deltas"] = (["time", "nearest_nodes"],
+                                pad_arrays_to_max(results["dist_deltas"], max_neighbors))
+    data_vars["node_ids"] = (["time", "nearest_nodes"],
+                             pad_arrays_to_max(results["node_ids"], max_neighbors))
 
     ds = xr.Dataset(
         data_vars=data_vars,
@@ -185,16 +188,16 @@ def make_collocated_nc_3d(results: dict, max_levels: int) -> xr.Dataset:
     # Get the variable names from the results dict
     obs_var_name = [k for k in results.keys() if k.startswith('argo_') and k != 'argo_depth'][0]
     model_var_name = [k for k in results.keys() if k.startswith('model_')][0]
-    
+
     data_vars = {
         "lon": (["time"], results["lon"]),
         "lat": (["time"], results["lat"]),
-        
+
         # Profile data
         "depth": (["time", "n_levels"], results["argo_depth"]),
         obs_var_name: (["time", "n_levels"], results[obs_var_name]),
         model_var_name: (["time", "n_levels"], results[model_var_name]),
-        
+
         # Collocation metadata
         "time_deltas": (["time"], results["time_deltas"]),
         "dist_deltas": (["time", "nearest_nodes"], results["dist_deltas"]),

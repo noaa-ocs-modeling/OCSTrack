@@ -72,14 +72,14 @@ class ArgoData:
 
             if 'N_LEVELS' in ds.dims:
                 max_levels = max(max_levels, ds.sizes['N_LEVELS'])
-            
+
             # This ensures all datasets are consistent *before* concatenation
             if 'JULD' not in ds.variables and 'JULD_LOCATION' in ds.variables:
                 _logger.info(f"Renaming 'JULD_LOCATION' to 'JULD' in {f}")
                 ds = ds.rename({'JULD_LOCATION': 'JULD'})
             elif 'JULD' not in ds.variables:
-                 _logger.warning(f"No JULD or JULD_LOCATION found in file: {f}. Skipping this file.")
-                 continue # Skip this bad file
+                _logger.warning(f"No JULD or JULD_LOCATION found in file: {f}. Skipping this file.")
+                continue # Skip this bad file
 
             datasets.append(ds)
 
@@ -119,8 +119,8 @@ class ArgoData:
 
         # Concatenate along N_PROF
         self.ds = xr.concat(
-            datasets, 
-            dim='N_PROF', 
+            datasets,
+            dim='N_PROF',
             combine_attrs="override",
             join="outer"
         )
@@ -131,13 +131,12 @@ class ArgoData:
                 self.ds = self.ds.set_coords(coord)
 
         self.ds = self.ds.sortby('JULD')
-        
+
         # Find and remove duplicate times
         _, unique_idx = np.unique(self.ds['JULD'], return_index=True)
         if len(unique_idx) < self.ds.sizes['N_PROF']:
             _logger.warning(f"Found and removed {self.ds.sizes['N_PROF'] - len(unique_idx)} duplicate time profiles.")
             self.ds = self.ds.isel(N_PROF=unique_idx)
-
 
         self.ds = self.ds.set_index(N_PROF='JULD')
         self.ds = self.ds.rename({'N_PROF': 'JULD'})
@@ -163,7 +162,7 @@ class ArgoData:
         Set new values for longitude.
         """
         if len(new_lon) != self.ds.sizes['JULD']:
-             raise ValueError("New longitude array must match existing size (JULD).")
+            raise ValueError("New longitude array must match existing size (JULD).")
         self.ds['LONGITUDE'] = (self.ds.JULD.name, np.array(new_lon))
 
     @property
@@ -177,7 +176,7 @@ class ArgoData:
         Set new values for latitude.
         """
         if len(new_lat) != self.ds.sizes['JULD']:
-             raise ValueError("New latitude array must match existing size (JULD).")
+            raise ValueError("New latitude array must match existing size (JULD).")
         self.ds['LATITUDE'] = (self.ds.JULD.name, np.array(new_lat))
 
     @property
