@@ -36,13 +36,13 @@ def generate_monthly_dates(start_date_str: str,
 
     start_date = datetime.strptime(start_date_str, '%Y-%m-%d').replace(day=1)
     end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
-    
+
     months = []
     current_date = start_date
     while current_date <= end_date:
         months.append((current_date.strftime('%Y'), current_date.strftime('%m')))
         current_date += relativedelta(months=1)
-        
+
     return list(sorted(set(months)))
 
 def _download_file(url: str, target_path: str) -> bool:
@@ -73,7 +73,7 @@ def _download_file(url: str, target_path: str) -> bool:
     except requests.RequestException as e:
         _logger.warning(f"Failed to download {url}: {e}")
         if os.path.exists(target_path):
-            os.remove(target_path) 
+            os.remove(target_path)
         return False
 
 def download_argo_data(year: str,
@@ -114,26 +114,26 @@ def download_argo_data(year: str,
 
     target_dir = os.path.join(raw_dir, year, month)
     os.makedirs(target_dir, exist_ok=True)
-    
+
     start_url = f"{base_url}/{region}/{year}/{month}/"
-    
+
     # Create datetime objects for comparison
     start_dt = datetime.strptime(start_date, '%Y-%m-%d')
     end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-    
+
     downloaded_files = []
     visited_urls = set()
     urls_to_scrape = [start_url]
-    
+
     link_finder = re.compile(r'href="([^"]+)"')
-    
+
     _logger.info(f"Scanning {start_url} for files between {start_date} and {end_date}...")
 
     while urls_to_scrape:
         current_url = urls_to_scrape.pop(0)
         if current_url in visited_urls:
             continue
-        
+
         visited_urls.add(current_url)
 
         try:
@@ -147,40 +147,40 @@ def download_argo_data(year: str,
 
         for href in links:
             if not href or href.startswith('?') or href.startswith('../'):
-                continue 
+                continue
 
             absolute_url = urljoin(current_url, href)
 
             if href.endswith('.nc'):
                 filename = os.path.basename(href)
-                
+
                 try:
                     # Parse date from filename, e.g., "20190829"
                     date_str = filename.split('_')[0]
                     file_date = datetime.strptime(date_str, '%Y%m%d')
-                    
+
                     # Check if the file's date is in our range
-                    if not (start_dt <= file_date <= end_dt):
+                    if not start_dt <= file_date <= end_dt:
                         _logger.info(f"Skipping download (out of date range): {filename}")
                         continue # Skip this file
                 except Exception:
                     _logger.warning(f"Could not parse date from {filename}. Skipping.")
                     continue
-                
+
                 target_path = os.path.join(target_dir, filename)
-                
+
                 if not os.path.exists(target_path):
                     if _download_file(absolute_url, target_path):
                         downloaded_files.append(target_path)
                 else:
                     _logger.info(f"File already exists: {filename}")
                     if target_path not in downloaded_files:
-                         downloaded_files.append(target_path)
+                        downloaded_files.append(target_path)
 
             elif href.endswith('/'):
                 if absolute_url not in visited_urls and absolute_url.startswith(start_url):
                     urls_to_scrape.append(absolute_url)
-    
+
     _logger.info(f"Downloaded {len(downloaded_files)} files for {year}-{month}")
     return downloaded_files
 
@@ -225,10 +225,10 @@ def crop_by_box_argo(dataset: xr.Dataset,
         lon_mask = (dataset.LONGITUDE >= lon_min) | (dataset.LONGITUDE <= lon_max)
 
     lat_mask = (dataset.LATITUDE >= lat_min) & (dataset.LATITUDE <= lat_max)
-    
+
     # Combine the masks
     mask = lat_mask & lon_mask
-    
+
     # Use .sel() to explicitly select along the N_PROF dimension
     cropped = dataset.sel(N_PROF=mask)
 
@@ -271,7 +271,7 @@ def crop_argo_data(file_paths: List[str],
     """
 
     os.makedirs(cropped_dir, exist_ok=True)
-    
+
     DROP_VARS = [
         'DATA_TYPE', 'FORMAT_VERSION', 'HANDBOOK_VERSION', 'REFERENCE_DATE_TIME',
         'DATE_CREATION', 'DATE_UPDATE', 'PLATFORM_NUMBER', 'PROJECT_NAME',
@@ -298,20 +298,20 @@ def crop_argo_data(file_paths: List[str],
     for file_path in tqdm(file_paths, desc="Cropping Argo data"):
         try:
             with xr.open_dataset(
-                file_path, 
+                file_path,
                 engine="netcdf4",
                 decode_cf=False,
                 drop_variables=DROP_VARS
             ) as ds_raw:
-                ds = xr.decode_cf(ds_raw, decode_coords=False) 
+                ds = xr.decode_cf(ds_raw, decode_coords=False)
 
                 # Time filtering
                 if not np.issubdtype(ds['JULD'].dtype, np.datetime64):
-                     ds['JULD'] = xr.decode_cf(ds).JULD
-                
+                    ds['JULD'] = xr.decode_cf(ds).JULD
+
                 time_mask = (ds.JULD >= start_dt) & (ds.JULD <= end_dt)
                 ds_time_filtered = ds.sel(N_PROF=time_mask)
-                
+
                 # Pass the time-filtered dataset to the spatial crop
                 cropped = crop_by_box_argo(ds_time_filtered, lat_min, lat_max, lon_min, lon_max)
                 cropped.load()
@@ -324,7 +324,7 @@ def crop_argo_data(file_paths: List[str],
                 _logger.info(f"Saved {out_path}")
             else:
                 _logger.warning(f"Skipping empty cropped dataset: {file_path}")
-        
+
         except Exception as e:
             _logger.warning(f"Failed to process {file_path}: {type(e).__name__} - {e}")
 
@@ -350,7 +350,7 @@ def clean_argo_data(file_paths: List[str],
     """
 
     os.makedirs(clean_dir, exist_ok=True)
-    
+
     DROP_VARS = [
         'DATA_TYPE', 'FORMAT_VERSION', 'HANDBOOK_VERSION', 'REFERENCE_DATE_TIME',
         'DATE_CREATION', 'DATE_UPDATE', 'PLATFORM_NUMBER', 'PROJECT_NAME',
@@ -377,7 +377,7 @@ def clean_argo_data(file_paths: List[str],
     for file_path in tqdm(file_paths, desc="Cleaning Argo data"):
         try:
             with xr.open_dataset(
-                file_path, 
+                file_path,
                 engine="netcdf4",
                 decode_cf=False,
                 drop_variables=DROP_VARS
@@ -387,8 +387,8 @@ def clean_argo_data(file_paths: List[str],
 
             # Time filtering step
             if not np.issubdtype(ds['JULD'].dtype, np.datetime64):
-                 ds['JULD'] = xr.decode_cf(ds).JULD
-            
+                ds['JULD'] = xr.decode_cf(ds).JULD
+
             time_mask = (ds.JULD >= start_dt) & (ds.JULD <= end_dt)
             ds_time_filtered = ds.sel(N_PROF=time_mask)
 
@@ -399,7 +399,7 @@ def clean_argo_data(file_paths: List[str],
                 _logger.info(f"Saved cleaned file: {out_path}")
             else:
                 _logger.warning(f"Skipping empty time-filtered dataset: {file_path}")
-        
+
         except Exception as e:
             _logger.warning(f"Failed to clean {file_path}: {type(e).__name__} - {e}")
 
@@ -443,17 +443,17 @@ def get_argo(start_date: str,
         The path to the 'processed' directory containing the final
         .nc files, or None if the process failed.
     """
-    
+
     output_dir = os.path.join(output_dir, region)
     raw_dir = os.path.join(output_dir, "raw")
-    processed_dir = os.path.join(output_dir, "processed") 
+    processed_dir = os.path.join(output_dir, "processed")
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(processed_dir, exist_ok=True)
 
     cropping_enabled = None not in (lat_min, lat_max, lon_min, lon_max)
-    
+
     months_to_download = generate_monthly_dates(start_date, end_date)
-    
+
     all_raw_files = []
     for year, month in tqdm(months_to_download, desc=f"Downloading {region} data"):
         # Pass dates down to the downloader
@@ -474,7 +474,7 @@ def get_argo(start_date: str,
     if cropping_enabled:
         _logger.info("Cropping enabled. Time-filtering and cropping files...")
         crop_argo_data(all_raw_files,
-                       processed_dir, 
+                       processed_dir,
                        lat_min,
                        lat_max,
                        lon_min,
@@ -484,7 +484,7 @@ def get_argo(start_date: str,
                        )
     else:
         _logger.info("Cropping disabled. Time-filtering all raw files...")
-        clean_argo_data(all_raw_files, 
+        clean_argo_data(all_raw_files,
                         processed_dir,
                         start_date,
                         end_date
