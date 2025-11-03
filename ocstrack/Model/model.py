@@ -131,16 +131,16 @@ class SCHISM:
         missing = [k for k in required_keys if k not in self.model_dict]
         if missing:
             raise ValueError(f"Missing keys in model_dict: {missing}")
-
+            
         valid_types = ['2D', '3D_Surface', '3D_Profile']
         var_type = self.model_dict['var_type']
-
+        
         if var_type not in valid_types:
             raise ValueError(
                 f"var_type must be one of {valid_types}, "
                 f"but got '{var_type}'"
             )
-
+        
         if var_type == '3D_Profile':
             profile_keys = ['zcor_var', 'zcor_startswith']
             missing_profile = [k for k in profile_keys if k not in self.model_dict]
@@ -217,100 +217,72 @@ class SCHISM:
         _logger.info("Opening model file: %s", path)
         with xr.open_dataset(path) as ds:
             var = ds[self.model_dict['var']]
-
+            
             # Check for the new '3D_Surface' type
             if self.model_dict.get('var_type') == '3D_Surface':
                 _logger.info("Extracting surface layer from 3D variable.")
                 var = var.isel(nSCHISM_vgrid_layers=-1)
         return var
 
-    def load_3d_data(self) -> xr.Dataset:
+    def load_3d_file_pair(self, f_main_path: str) -> xr.Dataset:
         """
-        Loads the full 3D model variable and its vertical coordinates by
-        finding, pairing, and merging the separate variable and z-coordinate
-        files for each time step.
+        Loads a single 3D variable file and its matching z-coordinate file.
 
-        This method is intended for 3D profile collocation (e.g., with Argo)
-        and is called when model_dict['var_type'] == '3D_Profile'.
+        This is the memory-efficient method for 3D collocation.
+
+        Parameters
+        ----------
+        f_main_path : str
+            The full path to the main variable file (e.g., "temperature_84.nc").
 
         Returns
         -------
         xr.Dataset
-            A single xarray Dataset containing the 3D variable (e.g., 'salt')
-            and its 'zcor' variable, concatenated across all files and
-            sliced by the instance's start_date and end_date.
-            The data is loaded into memory.
-
-        Raises
-        ------
-        ValueError
-            If no files were selected or if a matching z-coordinate
-            file cannot be found for a main variable file.
+            A single, in-memory dataset containing the 3D variable
+            and its 'zcor' variable for the time steps in that file.
         """
-        if not self.files:
-            _logger.warning("No files selected, cannot load 3D data.")
-            raise ValueError("No model files were found for the specified time range.")
 
         main_var = self.model_dict['var']
         main_startswith = self.model_dict['startswith']
-
         zcor_var = self.model_dict['zcor_var']
         zcor_startswith = self.model_dict['zcor_startswith']
+        f_main_name = os.path.basename(f_main_path)
 
-        _logger.info(f"Pairing and loading 3D data for {main_var} and {zcor_var}...")
+        # Construct the zcor filename
+        file_suffix = f_main_name[len(main_startswith):]
+        f_zcor_name = f"{zcor_startswith}{file_suffix}"
+        f_zcor_path = os.path.join(self.output_dir, f_zcor_name)
 
-        datasets_to_concat = []
-        for f_main_path in self.files:
-            f_main_name = os.path.basename(f_main_path)
+        if not os.path.exists(f_zcor_path):
+            _logger.error(f"Cannot find matching zcor file for {f_main_path}")
+            _logger.error(f"Looked for: {f_zcor_path}")
+            raise ValueError(f"Missing zcor file: {f_zcor_name}")
 
-            # Construct the zcor filename from the main var filename
-            # e.g., "temperature_84.nc" -> "zCoordinates_84.nc"
-            file_suffix = f_main_name[len(main_startswith):]
-            f_zcor_name = f"{zcor_startswith}{file_suffix}"
-            f_zcor_path = os.path.join(self.output_dir, f_zcor_name)
-
-            if not os.path.exists(f_zcor_path):
-                _logger.error(f"Cannot find matching zcor file for {f_main_path}")
-                _logger.error(f"Looked for: {f_zcor_path}")
-                raise ValueError(f"Missing zcor file: {f_zcor_name}")
-
-            # Open both files and merge them
-            try:
-                ds_main = xr.open_dataset(f_main_path, engine='netcdf4')
-                ds_zcor = xr.open_dataset(f_zcor_path, engine='netcdf4')
-
-                # Keep only the essential variables
-                ds_main = ds_main[[main_var]]
-                ds_zcor = ds_zcor[[zcor_var]]
-
-                # Merge. Xarray aligns them using the 'time' coordinate.
-                ds_merged = xr.merge([ds_main, ds_zcor])
-                datasets_to_concat.append(ds_merged)
-
-            except Exception as e:
-                _logger.error(f"Error opening/merging {f_main_path} and {f_zcor_path}: {e}")
-                raise
-
-        # Now we can concatenate all the merged datasets along time
-        _logger.info(f"Concatenating {len(datasets_to_concat)} merged datasets...")
         try:
-            ds = xr.concat(datasets_to_concat, dim="time")
+            ds_main = xr.open_dataset(f_main_path, engine='netcdf4')
+            ds_zcor = xr.open_dataset(f_zcor_path, engine='netcdf4')
+
+            # Keep only the essential variables
+            ds_main = ds_main[[main_var]]
+            ds_zcor = ds_zcor[[zcor_var]]
+
+            # Merge
+            ds_merged = xr.merge([ds_main, ds_zcor])
+
+            # Slice by time *before* loading, just in case
+            time_slice = slice(self.start_date, self.end_date)
+            ds_sliced = ds_merged.sel(time=time_slice)
+
+            # Load this small chunk into memory
+            ds_sliced.load()
+            ds_main.close()
+            ds_zcor.close()
+            
+            return ds_sliced
+
         except Exception as e:
-            _logger.error(f"Failed to concatenate merged datasets: {e}")
+            _logger.error(f"Error opening/merging {f_main_path} and {f_zcor_path}: {e}")
             raise
-
-        _logger.info("Slicing combined dataset to requested time range...")
-        time_slice = slice(self.start_date, self.end_date)
-        ds_sliced = ds.sel(time=time_slice)
-
-        # Load into memory for fast collocation
-        _logger.info("Loading 3D data into memory (this may take a moment)...")
-        ds_sliced.load()
-        ds.close() # Close the lazy-loaded dataset
-        _logger.info("Data loading complete.")
-
-        return ds_sliced
-
 
     @property
     def mesh_x(self) -> np.ndarray:
@@ -383,9 +355,9 @@ class ADCSWAN:
         self.model_dict = model_dict
         self.start_date = np.datetime64(start_date)
         self.end_date = np.datetime64(end_date)
-
+        
         # Note: self.output_dir is kept for SCHISM compatibility but points to rundir
-        self.output_dir = self.rundir
+        self.output_dir = self.rundir 
 
         self._validate_model_dict()
         self._files = self._select_model_files()
@@ -396,10 +368,9 @@ class ADCSWAN:
             _logger.info(f"ADC+SWAN mesh loaded from {self._mesh_path}")
         else:
             self._mesh_path = None
-            self._mesh_x, self._mesh_y, self._mesh_depth = (np.array([]),
-                                                            np.array([]),
-                                                            np.array([]))
+            self._mesh_x, self._mesh_y, self._mesh_depth = (np.array([]), np.array([]), np.array([]))
             _logger.warning("No ADC+SWAN file found, mesh could not be loaded.")
+
 
     def _validate_model_dict(self) -> None:
         """
@@ -452,16 +423,17 @@ class ADCSWAN:
 
         selected = []
         file_pattern = self.model_dict['startswith']
+        
         found_files = [f for f in all_files if f.startswith(file_pattern) and f.endswith(".nc")]
 
         if not found_files:
             _logger.warning(f"No file found in {self.rundir} starting with '{file_pattern}'")
             return []
-
+        
         if len(found_files) > 1:
             _logger.warning(f"Multiple files found matching '{file_pattern}'. "
                             f"Using the first one: {found_files[0]}")
-
+        
         fpath = os.path.join(self.rundir, found_files[0])
 
         try:
@@ -470,7 +442,7 @@ class ADCSWAN:
                 if 'time' not in ds.variables:
                     _logger.warning(f"File {fpath} has no 'time' variable. Skipping.")
                     return []
-
+                
                 # Decode only time for validation
                 times = xr.decode_cf(ds[['time']])['time'].values
 
@@ -510,15 +482,15 @@ class ADCSWAN:
             # Xarray will open the file, slice, and then load.
             ds = xr.open_dataset(path, drop_variables=['neta','nvel'])
             var = ds[self.model_dict['var']]
-
+            
             time_slice = slice(self.start_date, self.end_date)
             var_sliced = var.sel(time=time_slice)
-
+            
             var_loaded = var_sliced.load()
             ds.close()
-
+            
             return var_loaded
-
+            
         except KeyError:
             _logger.error(f"Variable '{self.model_dict['var']}' not found in {path}")
             ds.close()

@@ -92,7 +92,7 @@ class Collocate:
             self.obs_time_coord = 'JULD'
         else:
             raise TypeError("Observation type must be SatelliteData or ArgoData")
-
+        
         # Store the collocation type based on the model dict
         self.collocation_type = self.model.model_dict.get('var_type', '2D')
 
@@ -107,45 +107,40 @@ class Collocate:
         self.locator = GeocentricSpatialLocator(
             self.model.mesh_x, self.model.mesh_y, model_height=None
         )
-
+        
         if not _HAS_GSW and self.collocation_type == '3D_Profile':
-            _logger.warning("`gsw` library not found. install gsw for accurate depth conversion."
+             _logger.warning("`gsw` library not found. `pip install gsw` for accurate depth conversion."
                              " Falling back to simple approximation (dbar * -1.0197).")
 
         # Time buffer logic based on collocation type
         if time_buffer is None:
             _logger.info("Inferring time_buffer...")
-            # For 2D/Surface, load one file to get times
+            if not self.model.files:
+                raise ValueError("Cannot infer time_buffer: Model has no files.")
+            
+            # This logic now works for ALL types
+            example_file = self.model.files[0]
+            
             if self.collocation_type in ['2D', '3D_Surface']:
-                if not self.model.files:
-                    raise ValueError("Cannot infer time_buffer: Model has no files.")
-                example_file = self.model.files[0]
                 times = self.model.load_variable(example_file)["time"].values
-
-            # For 3D_Profile, load all data *once* and get times
+            
             elif self.collocation_type == '3D_Profile':
-                _logger.info("Loading 3D model data for time buffer inference...")
-                self.model_data = self.model.load_3d_data()
-                times = self.model_data.time.values
-
+                _logger.info("Loading one 3D file pair for time buffer inference...")
+                # Load just one file pair to get time info
+                with self.model.load_3d_file_pair(example_file) as m_data:
+                    times = m_data.time.values
             else:
                 raise ValueError(f"Unknown var_type: {self.collocation_type}")
 
             if len(times) < 2:
                 raise ValueError("Cannot infer time_buffer: less than two model timesteps.")
-
-            timestep = np.diff(times).mean() # Use mean diff for safety
+            
+            timestep = np.diff(times).mean()
             self.time_buffer = timestep / 2
             _logger.info(f"Inferred time_buffer as half mean timestep: {self.time_buffer}")
-
+        
         else:
             self.time_buffer = time_buffer
-            # If 3D_Profile, load data if it wasn't already loaded
-            if self.collocation_type == '3D_Profile':
-                # Check if it was already loaded by buffer logic
-                if not hasattr(self, 'model_data'):
-                    _logger.info("Loading 3D model data...")
-                    self.model_data = self.model.load_3d_data()
 
     def run(self, output_path: Optional[str] = None) -> xr.Dataset:
         """
@@ -174,22 +169,22 @@ class Collocate:
         """
         if self.collocation_type in ['2D', '3D_Surface']:
             if not isinstance(self.obs, SatelliteData):
-                raise TypeError("2D/3D_Surface colloc requires SatelliteData observation type.")
+                raise TypeError("2D/3D_Surface collocation requires SatelliteData observation type.")
             _logger.info("Starting 2D/Surface collocation...")
             return self._run_surface_collocation(output_path)
-
+        
         elif self.collocation_type == '3D_Profile':
             if not isinstance(self.obs, ArgoData):
                 raise TypeError("3D_Profile collocation requires ArgoData observation type.")
-
+            
             if self.search_radius is not None:
                 _logger.warning("Radius search is not yet supported for 3D_Profile, "
                                 "using n_nearest=4 (default) instead.")
                 self.n_nearest = 4 # Default for 3D
-
+            
             _logger.info("Starting 3D Profile collocation...")
             return self._run_profile_collocation(output_path)
-
+        
         else:
             raise NotImplementedError(f"Collocation type {self.collocation_type} not supported.")
 
@@ -214,24 +209,24 @@ class Collocate:
         # Make variable names generic
         model_var_name = self.model.model_dict['var']
         # Map model var to obs var (assuming SatelliteData)
-        obs_var_map = {'sigWaveHeight': 'swh'}
+        obs_var_map = {'sigWaveHeight': 'swh'} 
         obs_var_name = obs_var_map.get(model_var_name, 'swh') # Default to 'swh'
-
+        
         # Generic results dictionary
         results = {k: [] for k in [
             "time_obs", "lat_obs", "lon_obs", "source_obs",
             f"obs_{obs_var_name}", "obs_sla", f"model_{model_var_name}", "model_dpt",
-            "dist_deltas", "node_ids", "time_deltas",
+            "dist_deltas", "node_idx", "time_deltas",
             f"model_{model_var_name}_weighted", "bias_raw", "bias_weighted"
         ]}
-
+        
         # Remove keys for optional obs variables if not present
         if 'swh' not in self.obs.ds:
-            results.pop(f"obs_{obs_var_name}", None)
+             results.pop(f"obs_{obs_var_name}", None)
         if 'sla' not in self.obs.ds:
-            results.pop("obs_sla", None)
+             results.pop("obs_sla", None)
         if 'source' not in self.obs.ds:
-            results.pop("source_obs", None)
+             results.pop("source_obs", None)
 
         include_coast = self.dist_coast is not None
         if include_coast:
@@ -275,11 +270,11 @@ class Collocate:
                 results[f"obs_{obs_var_name}"].append(obs_sub[obs_var_name].values)
             if "obs_sla" in results:
                 results["obs_sla"].append(obs_sub["sla"].values)
-
+            
             results[f"model_{model_var_name}"].append(spatial["model_var"])
             results["model_dpt"].append(spatial["model_dpt"])
             results["dist_deltas"].append(spatial["dist_deltas"])
-            results["node_ids"].append(spatial["node_ids"])
+            results["node_idx"].append(spatial["node_idx"])
             results[f"model_{model_var_name}_weighted"].append(spatial["model_var_weighted"])
             results["bias_raw"].append(spatial["bias_raw"])
             results["bias_weighted"].append(spatial["bias_weighted"])
@@ -290,7 +285,7 @@ class Collocate:
 
         n_neighbors = None if self.search_radius is not None else self.n_nearest
         ds_out = make_collocated_nc_2d(results, n_neighbors, model_var_name, obs_var_name)
-
+        
         if output_path:
             ds_out.to_netcdf(output_path)
         return ds_out
@@ -314,84 +309,115 @@ class Collocate:
             Dataset containing collocated 3D profile data.
         """
 
-        m_times = self.model_data["time"].values
-
-        _logger.info("Performing temporal collocation...")
-        if self.temporal_interp:
-            argo_sub, ib, ia, wts, tdel = temporal_interpolated(self.obs.ds,
-                                                               m_times,
-                                                               self.time_buffer,
-                                                               self.obs_time_coord)
-            time_args = (ib, ia, wts)
-        else:
-            argo_sub, idx, tdel = temporal_nearest(self.obs.ds,
-                                                   m_times,
-                                                   self.time_buffer,
-                                                   self.obs_time_coord)
-            time_args = idx
-
-        if argo_sub[self.obs_time_coord].size == 0:
-            _logger.warning("No Argo data found within model time range. Returning empty dataset.")
-            return xr.Dataset()
-
-        _logger.info("Performing spatial collocation (finding nearest nodes)...")
-        lons = argo_sub["LONGITUDE"].values
-        lats = argo_sub["LATITUDE"].values
-        heights = np.zeros_like(lons) # Argo floats are at sea level
-
-        dists, nodes = self.locator.query_nearest(
-            lons, lats, heights, k=self.n_nearest
-        )
-
-        _logger.info("Performing vertical collocation (interpolating profiles)...")
-
+        _logger.info("Starting 3D Profile collocation (file-by-file)...")
+        
         # Get variable names from model_dict
         main_var = self.model.model_dict['var']
         zcor_var = self.model.model_dict['zcor_var']
-
+        
         # Map model var name to argo var name
         obs_var_map = {'temperature': 'temp', 'salinity': 'psal'}
         obs_var = obs_var_map.get(main_var)
         if obs_var is None:
             raise ValueError(f"No Argo variable mapping for model var '{main_var}'")
 
-        # Get max vertical levels from Argo data for padding
         max_levels = self.obs.ds.sizes['N_LEVELS']
 
-        # Call the correct V-H (Vertical-then-Horizontal) extractor
-        v_data = self._extract_model_profiles_3d(
-            argo_sub=argo_sub,
-            time_args=time_args,
-            nodes=nodes,
-            dists=dists,
-            model_var_name=main_var,
-            model_zcor_name=zcor_var,
-            obs_var_name=obs_var,
-            max_levels=max_levels
-        )
-
-        _logger.info("Assembling final dataset...")
-        include_coast = self.dist_coast is not None
-        if include_coast:
-            # lats and lons are already defined from the spatial search
-            dist_coast_values = self._coast_distance(lats, lons)
-        results = {
-            "time": argo_sub[self.obs_time_coord].values,
-            "lat": argo_sub["LATITUDE"].values,
-            "lon": argo_sub["LONGITUDE"].values,
-            "time_deltas": tdel,
-            "dist_deltas": dists,
-            "node_ids": nodes,
-            "argo_depth": v_data["obs_depth"],
-            f"argo_{obs_var}": v_data["obs_var"],
-            f"model_{main_var}": v_data["model_var_interp"],
+        # Create lists to store results from each loop
+        results_list = {
+            "time": [],
+            "lat": [],
+            "lon": [],
+            "time_deltas": [],
+            "dist_deltas": [],
+            "node_idx": [],
+            "argo_depth": [],
+            f"argo_{obs_var}": [],
+            f"model_{main_var}": [],
         }
 
-        if include_coast:
-            results["dist_coast"] = dist_coast_values
+        # Loop through model files
+        for f_main_path in tqdm(self.model.files, desc="Collocating 3D Profiles"):
+            try:
+                # Load just this one file's data (temp + zcor)
+                m_data = self.model.load_3d_file_pair(f_main_path)
+            except Exception as e:
+                _logger.warning(f"Skipping file {f_main_path} due to load error: {e}")
+                continue
 
-        ds_out = make_collocated_nc_3d(results, max_levels)
+            m_times = m_data["time"].values
+            
+            # 1. Temporal Collocation (find Argo profiles for *this* file)
+            if self.temporal_interp:
+                argo_sub, ib, ia, wts, tdel = temporal_interpolated(self.obs.ds,
+                                                                   m_times,
+                                                                   self.time_buffer,
+                                                                   self.obs_time_coord)
+                time_args = (ib, ia, wts)
+            else:
+                argo_sub, idx, tdel = temporal_nearest(self.obs.ds,
+                                                       m_times,
+                                                       self.time_buffer,
+                                                       self.obs_time_coord)
+                time_args = idx
 
+            if argo_sub[self.obs_time_coord].size == 0:
+                m_data.close()
+                continue # No Argo profiles match this model file
+
+            # 2. Spatial Collocation
+            lons = argo_sub["LONGITUDE"].values
+            lats = argo_sub["LATITUDE"].values
+            heights = np.zeros_like(lons)
+
+            dists, nodes = self.locator.query_nearest(
+                lons, lats, heights, k=self.n_nearest
+            )
+            
+            # 3. Vertical Collocation
+            v_data = self._extract_model_profiles_3d(
+                argo_sub=argo_sub,
+                time_args=time_args,
+                nodes=nodes,
+                dists=dists,
+                model_var_name=main_var,
+                model_zcor_name=zcor_var,
+                obs_var_name=obs_var,
+                max_levels=max_levels,
+                model_data=m_data
+            )
+            
+            # 4. Append results to list
+            results_list["time"].append(argo_sub[self.obs_time_coord].values)
+            results_list["lat"].append(lats)
+            results_list["lon"].append(lons)
+            results_list["time_deltas"].append(tdel)
+            results_list["dist_deltas"].append(dists)
+            results_list["node_idx"].append(nodes)
+            results_list["argo_depth"].append(v_data["obs_depth"])
+            results_list[f"argo_{obs_var}"].append(v_data["obs_var"])
+            results_list[f"model_{main_var}"].append(v_data["model_var_interp"])
+
+            m_data.close() # Close the file before loading the next
+
+        # --- NEW: Concatenate all results at the end ---
+        _logger.info("Assembling final dataset from all file chunks...")
+        
+        # Check if any results were found
+        if not results_list["time"]:
+            _logger.warning("No collocated 3D data found. Returning empty dataset.")
+            return xr.Dataset()
+
+        final_results = {}
+        for key, value in results_list.items():
+            if key in ["dist_deltas", "node_idx", "argo_depth",
+                       f"argo_{obs_var}", f"model_{main_var}"]:
+                final_results[key] = np.vstack(value)
+            else:
+                final_results[key] = np.concatenate(value)
+
+        ds_out = make_collocated_nc_3d(final_results, max_levels)
+        
         if output_path:
             ds_out.to_netcdf(output_path)
         return ds_out
@@ -404,7 +430,8 @@ class Collocate:
                                    model_var_name: str,
                                    model_zcor_name: str,
                                    obs_var_name: str,
-                                   max_levels: int
+                                   max_levels: int,
+                                   model_data: xr.Dataset
                                    ) -> dict:
         """
         Extracts and collocates 3D model profiles onto Argo vertical levels.
@@ -432,6 +459,8 @@ class Collocate:
             The name of the main observation variable (e.g., 'temp').
         max_levels : int
             The maximum number of vertical levels for padding the output arrays.
+        model_data : xr.Dataset
+            Single file.
 
         Returns
         -------
@@ -441,87 +470,83 @@ class Collocate:
             - "obs_var": (n_profiles, max_levels)
             - "model_var_interp": (n_profiles, max_levels)
         """
-
+        
         # Get spatial weights (shape: [n_profiles, k_nearest])
         spatial_weights = inverse_distance_weights(dists, self.weight_power)
         n_profiles = argo_sub[self.obs_time_coord].size
-
+        
         out_obs_depth = np.full((n_profiles, max_levels), np.nan)
         out_obs_var = np.full((n_profiles, max_levels), np.nan)
         out_model_var = np.full((n_profiles, max_levels), np.nan)
 
-        # Get data from the argo_sub (the subset), NOT self.obs (the full dataset)
-        # Map obs_var_name ('temp') to the actual variable names
-        argo_var_name_adj = f"{obs_var_name.upper()}_ADJUSTED" # e.g., TEMP_ADJUSTED
-        argo_var_name_raw = f"{obs_var_name.upper()}"         # e.g., TEMP
-
+        # Get data from the argo_sub (the subset)
+        argo_var_name_adj = f"{obs_var_name.upper()}_ADJUSTED"
+        argo_var_name_raw = f"{obs_var_name.upper()}"
         argo_all_pres = argo_sub.get('PRES_ADJUSTED', argo_sub['PRES']).values
         argo_all_var = argo_sub.get(argo_var_name_adj, argo_sub[argo_var_name_raw]).values
         argo_all_lats = argo_sub['LATITUDE'].values
 
-        # Get all Model data (already in memory)
-        model_all_var = self.model_data[model_var_name]
-        model_all_zcor = self.model_data[model_zcor_name]
-
+        # Use the passed model_data
+        model_all_var = model_data[model_var_name]
+        model_all_zcor = model_data[model_zcor_name]
+        
         for i in tqdm(range(n_profiles), desc="Vertical Collocation"):
             # profile *in the subset*.
             argo_pres_i = argo_all_pres[i, :]
             argo_lat_i = argo_all_lats[i]
-
+            
             if _HAS_GSW:
                 argo_depth = gsw.z_from_p(argo_pres_i, argo_lat_i)
             else:
                 argo_depth = argo_pres_i * -1.0197
-
+            
             argo_var_i = argo_all_var[i, :]
-
+            
             valid_argo = ~np.isnan(argo_depth) & ~np.isnan(argo_var_i)
             if not np.any(valid_argo):
                 continue
-
+                
             argo_depth_valid = argo_depth[valid_argo]
             argo_var_valid = argo_var_i[valid_argo]
-
+            
             sort_idx_argo = np.argsort(argo_depth_valid)
             argo_depth_sorted = argo_depth_valid[sort_idx_argo]
             argo_var_sorted = argo_var_valid[sort_idx_argo]
             n_valid_levels = len(argo_depth_sorted)
-
+            
             out_obs_depth[i, :n_valid_levels] = argo_depth_sorted
             out_obs_var[i, :n_valid_levels] = argo_var_sorted
 
             # 2. Get Model Data (Temporal Interp)
-            node_indices = nodes[i, :]
-
+            node_indices = nodes[i, :] 
+            
             if self.temporal_interp:
                 ib, ia, wts = time_args
                 t_idx_b, t_idx_a, t_wt = ib[i], ia[i], wts[i]
-
+                
                 zcor_b = model_all_zcor.isel(time=t_idx_b, nSCHISM_hgrid_node=node_indices).values
                 zcor_a = model_all_zcor.isel(time=t_idx_a, nSCHISM_hgrid_node=node_indices).values
                 var_b = model_all_var.isel(time=t_idx_b, nSCHISM_hgrid_node=node_indices).values
                 var_a = model_all_var.isel(time=t_idx_a, nSCHISM_hgrid_node=node_indices).values
-
+                
                 model_zcor_at_nodes = zcor_b * (1 - t_wt) + zcor_a * t_wt
                 model_var_at_nodes = var_b * (1 - t_wt) + var_a * t_wt
-
+            
             else: # Temporal nearest
                 t_idx = time_args[i]
-                model_zcor_at_nodes = model_all_zcor.isel(time=t_idx,
-                                                          nSCHISM_hgrid_node=node_indices).values
-                model_var_at_nodes = model_all_var.isel(time=t_idx,
-                                                        nSCHISM_hgrid_node=node_indices).values
-
+                model_zcor_at_nodes = model_all_zcor.isel(time=t_idx, nSCHISM_hgrid_node=node_indices).values
+                model_var_at_nodes = model_all_var.isel(time=t_idx, nSCHISM_hgrid_node=node_indices).values
+            
             # 3. Vertical-then-Horizontal Interpolation
             model_profiles_at_argo_depths = np.full((self.n_nearest, n_valid_levels), np.nan)
-
+            
             for k in range(self.n_nearest):
                 model_zcor_k = model_zcor_at_nodes[k, :]
                 model_var_k = model_var_at_nodes[k, :]
 
                 valid_model = ~np.isnan(model_zcor_k) & ~np.isnan(model_var_k)
                 if not np.any(valid_model):
-                    continue
+                    continue 
 
                 model_zcor_k_valid = model_zcor_k[valid_model]
                 model_var_k_valid = model_var_k[valid_model]
@@ -529,17 +554,19 @@ class Collocate:
                 sort_idx_model = np.argsort(model_zcor_k_valid)
                 model_zcor_k_sorted = model_zcor_k_valid[sort_idx_model]
                 model_var_k_sorted = model_var_k_valid[sort_idx_model]
-
+                
                 model_profile_k_interp = np.interp(
                     argo_depth_sorted,
                     model_zcor_k_sorted,
                     model_var_k_sorted,
                     left=np.nan, right=np.nan
                 )
+                
                 model_profiles_at_argo_depths[k, :] = model_profile_k_interp
 
             # 4. Spatial IDW
             weights_i = spatial_weights[i, :]
+            
             with np.errstate(invalid='ignore'):
                 profiles_T = model_profiles_at_argo_depths.T
                 final_model_profile = np.nansum(profiles_T * weights_i, axis=1)
@@ -548,7 +575,7 @@ class Collocate:
                 )
                 norm_weights[norm_weights == 0] = np.nan
                 final_model_profile = final_model_profile / norm_weights
-
+            
             out_model_var[i, :n_valid_levels] = final_model_profile
 
         return {
@@ -590,7 +617,7 @@ class Collocate:
         try:
             return np.zeros_like(obs_sub["lon"].values)
         except KeyError: # Fallback for ArgoData if it got here
-            return np.zeros_like(obs_sub["LONGITUDE"].values)
+             return np.zeros_like(obs_sub["LONGITUDE"].values)
 
 
     def _collocate_with_radius(self, obs_sub, m_var, time_args):
@@ -611,11 +638,11 @@ class Collocate:
         dict
             Dictionary containing 2D collocated arrays (e.g., "model_var", "dist_deltas").
         """
-
+        
         obs_var_map = {'sigWaveHeight': 'swh'}
         model_var_name = self.model.model_dict['var']
         obs_var_name = obs_var_map.get(model_var_name, 'swh')
-
+        
         lons = obs_sub["lon"].values
         lats = obs_sub["lat"].values
         heights = self._get_obs_height(obs_sub)
@@ -623,7 +650,7 @@ class Collocate:
         all_dists, all_nodes = self.locator.query_radius(
             lons, lats, heights, radius_m=self.search_radius
         )
-
+        
         flat_nodes = []
         flat_ib, flat_ia, flat_wt = [], [], []
         obs_lens = []
@@ -631,7 +658,7 @@ class Collocate:
         for i, (nodes, dists) in enumerate(zip(all_nodes, all_dists)):
             obs_lens.append(len(nodes))
             if len(nodes) == 0:
-                continue
+                continue 
 
             if self.temporal_interp:
                 ib, ia, wts = time_args
@@ -639,7 +666,7 @@ class Collocate:
                 flat_ia.extend([ia[i]] * len(nodes))
                 flat_wt.extend([wts[i]] * len(nodes))
             else:
-                flat_ib.extend([time_args[i]] * len(nodes))
+                flat_ib.extend([time_args[i]] * len(nodes)) 
 
             flat_nodes.extend(nodes)
 
@@ -651,7 +678,7 @@ class Collocate:
                 "model_var": nan_arr,
                 "model_dpt": nan_arr,
                 "dist_deltas": nan_arr,
-                "node_ids": nan_arr,
+                "node_idx": nan_arr,
                 "model_var_weighted": np.full(n_obs, np.nan),
                 "bias_raw": np.full(n_obs, np.nan),
                 "bias_weighted": np.full(n_obs, np.nan),
@@ -698,7 +725,7 @@ class Collocate:
             "model_var": pad(split_vals),
             "model_dpt": pad(split_dpts),
             "dist_deltas": pad(split_dists),
-            "node_ids": pad([a.astype(float) for a in split_nodes]),
+            "node_idx": pad([a.astype(float) for a in split_nodes]),
             "model_var_weighted": np.array(weighted_vals),
             "bias_raw": np.array([
                 np.nanmean(v) - s if len(v) > 0 else np.nan
@@ -729,7 +756,7 @@ class Collocate:
         obs_var_map = {'sigWaveHeight': 'swh'}
         model_var_name = self.model.model_dict['var']
         obs_var_name = obs_var_map.get(model_var_name, 'swh')
-
+        
         lons = obs_sub["lon"].values
         lats = obs_sub["lat"].values
         heights = self._get_obs_height(obs_sub)
@@ -746,7 +773,7 @@ class Collocate:
             "model_var": m_vals,
             "model_dpt": m_dpts,
             "dist_deltas": dists,
-            "node_ids": nodes,
+            "node_idx": nodes,
             "model_var_weighted": weighted,
             "bias_raw": m_vals.mean(axis=1) - obs_sub[obs_var_name].values,
             "bias_weighted": weighted - obs_sub[obs_var_name].values,
@@ -792,14 +819,14 @@ class Collocate:
 
         # Logic for radius search (nodes is 1D)
         if self.search_radius is not None:
-            if self.temporal_interp:
+             if self.temporal_interp:
                 ib, ia, wts = times_or_inds
                 for i, nd in enumerate(nodes): # nodes is flat 1D array
                     v0 = model_data[ib[i], nd]
                     v1 = model_data[ia[i], nd]
                     values.append(v0 * (1 - wts[i]) + v1 * wts[i])
                     dpts.append(depths[nd])
-            else:
+             else:
                 t_idx = times_or_inds
                 for i, nd in enumerate(nodes): # nodes is flat 1D array
                     values.append(model_data[t_idx[i], nd])
@@ -828,7 +855,7 @@ class Collocate:
         if not values:
             k = nodes.shape[1] if nodes.ndim == 2 else 0
             return np.empty((0, k)), np.empty((0, k))
-
+        
         return np.array(values), np.array(dpts)
 
 
