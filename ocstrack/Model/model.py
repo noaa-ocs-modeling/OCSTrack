@@ -131,16 +131,16 @@ class SCHISM:
         missing = [k for k in required_keys if k not in self.model_dict]
         if missing:
             raise ValueError(f"Missing keys in model_dict: {missing}")
-            
+
         valid_types = ['2D', '3D_Surface', '3D_Profile']
         var_type = self.model_dict['var_type']
-        
+
         if var_type not in valid_types:
             raise ValueError(
                 f"var_type must be one of {valid_types}, "
                 f"but got '{var_type}'"
             )
-        
+
         if var_type == '3D_Profile':
             profile_keys = ['zcor_var', 'zcor_startswith']
             missing_profile = [k for k in profile_keys if k not in self.model_dict]
@@ -217,7 +217,7 @@ class SCHISM:
         _logger.info("Opening model file: %s", path)
         with xr.open_dataset(path) as ds:
             var = ds[self.model_dict['var']]
-            
+
             # Check for the new '3D_Surface' type
             if self.model_dict.get('var_type') == '3D_Surface':
                 _logger.info("Extracting surface layer from 3D variable.")
@@ -277,7 +277,7 @@ class SCHISM:
             ds_sliced.load()
             ds_main.close()
             ds_zcor.close()
-            
+
             return ds_sliced
 
         except Exception as e:
@@ -355,9 +355,9 @@ class ADCSWAN:
         self.model_dict = model_dict
         self.start_date = np.datetime64(start_date)
         self.end_date = np.datetime64(end_date)
-        
+
         # Note: self.output_dir is kept for SCHISM compatibility but points to rundir
-        self.output_dir = self.rundir 
+        self.output_dir = self.rundir
 
         self._validate_model_dict()
         self._files = self._select_model_files()
@@ -368,14 +368,14 @@ class ADCSWAN:
             _logger.info(f"ADC+SWAN mesh loaded from {self._mesh_path}")
         else:
             self._mesh_path = None
-            self._mesh_x, self._mesh_y, self._mesh_depth = (np.array([]), np.array([]), np.array([]))
+            self._mesh_x, self._mesh_y, self._mesh_depth = (np.array([]),
+                                                            np.array([]),
+                                                            np.array([]))
             _logger.warning("No ADC+SWAN file found, mesh could not be loaded.")
-
 
     def _validate_model_dict(self) -> None:
         """
         Ensure the model_dict contains all required keys.
-
         Raises
         ------
         ValueError
@@ -423,17 +423,17 @@ class ADCSWAN:
 
         selected = []
         file_pattern = self.model_dict['startswith']
-        
+
         found_files = [f for f in all_files if f.startswith(file_pattern) and f.endswith(".nc")]
 
         if not found_files:
             _logger.warning(f"No file found in {self.rundir} starting with '{file_pattern}'")
             return []
-        
+
         if len(found_files) > 1:
             _logger.warning(f"Multiple files found matching '{file_pattern}'. "
                             f"Using the first one: {found_files[0]}")
-        
+
         fpath = os.path.join(self.rundir, found_files[0])
 
         try:
@@ -442,7 +442,7 @@ class ADCSWAN:
                 if 'time' not in ds.variables:
                     _logger.warning(f"File {fpath} has no 'time' variable. Skipping.")
                     return []
-                
+
                 # Decode only time for validation
                 times = xr.decode_cf(ds[['time']])['time'].values
 
@@ -482,15 +482,15 @@ class ADCSWAN:
             # Xarray will open the file, slice, and then load.
             ds = xr.open_dataset(path, drop_variables=['neta','nvel'])
             var = ds[self.model_dict['var']]
-            
+
             time_slice = slice(self.start_date, self.end_date)
             var_sliced = var.sel(time=time_slice)
-            
+
             var_loaded = var_sliced.load()
             ds.close()
-            
+
             return var_loaded
-            
+
         except KeyError:
             _logger.error(f"Variable '{self.model_dict['var']}' not found in {path}")
             ds.close()
