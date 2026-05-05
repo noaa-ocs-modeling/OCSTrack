@@ -1,18 +1,18 @@
 """ Download and pre-process Argo Float data """
 
-import os
-import requests
 import logging
+import os
+import re
 import shutil
 import time
-import xarray as xr
-import re
-import numpy as np
-
-from urllib.parse import urljoin
 from datetime import datetime
+from typing import Union, Optional, List, Tuple
+from urllib.parse import urljoin
+
+import numpy as np
+import requests
+import xarray as xr
 from dateutil.relativedelta import relativedelta
-from typing import Union, Optional, List
 from tqdm import tqdm
 
 # Assuming urls.py is in the same module
@@ -22,7 +22,7 @@ from .urls import ARGO_BASE_URL
 _logger = logging.getLogger(__name__)
 
 def generate_monthly_dates(start_date_str: str,
-                           end_date_str: str) -> List[tuple[str, str]]:
+                           end_date_str: str) -> List[Tuple[str, str]]:
     """
     Generates a list of (year, month) tuples between start and end dates.
 

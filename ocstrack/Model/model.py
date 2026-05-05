@@ -288,41 +288,44 @@ class SCHISM:
 
     @property
     def mesh_x(self) -> np.ndarray:
-        """ return mesh_x """
+        """Return mesh longitudes."""
         return self._mesh_x
+
     @mesh_x.setter
     def mesh_x(self, new_mesh_x: Union[np.ndarray, list]):
-        """ set mesh_y """
+        """Set mesh longitudes."""
         if len(new_mesh_x) != len(self.mesh_x):
             raise ValueError("New longitude array must match existing size.")
         self._mesh_x = new_mesh_x
 
     @property
     def mesh_y(self) -> np.ndarray:
-        """ return mesh_y """
+        """Return mesh latitudes."""
         return self._mesh_y
+
     @mesh_y.setter
     def mesh_y(self, new_mesh_y: Union[np.ndarray, list]):
-        """ set mesh_y """
+        """Set mesh latitudes."""
         if len(new_mesh_y) != len(self.mesh_y):
-            raise ValueError("New longitude array must match existing size.")
+            raise ValueError("New latitude array must match existing size.")
         self._mesh_y = new_mesh_y
 
     @property
     def mesh_depth(self) -> np.ndarray:
-        """ return mesh_depth """
+        """Return mesh node depths."""
         return self._mesh_depth
 
     @property
     def files(self) -> List[str]:
-        """ return file list """
+        """Return the list of selected model output files."""
         return self._files
 
     @property
     def time(self) -> np.ndarray:
         """
         Return the concatenated time array for all selected files.
-        Cached after the first call to avoid re-reading files.
+
+        The time array is cached after the first call.
         """
         if self._time is not None:
             return self._time
@@ -357,14 +360,15 @@ class SCHISM:
 
 class ADCSWAN:
     """
-    ADCIRC+SWAN model interface
+    ADCIRC+SWAN model interface.
 
-    Handles selection and loading of model outputs from a single ADCIRC+SWAN NetCDF file.
-    The class locates a single file based on 'startswith' and validates its
-    time range against the requested start/end dates.
+    Handles selection and loading of model outputs from a single ADCIRC+SWAN
+    NetCDF file. This class locates a single file based on 'startswith' and
+    validates its time range against the requested start/end dates.
     It reads mesh coordinates (x, y, depth) directly from this file.
 
-    This class mimics the SCHISM interface for compatibility.
+    This class mimics the SCHISM interface for compatibility in the collocation
+    workflow.
     """
     def __init__(self, rundir: str,
                  model_dict: dict,
@@ -541,32 +545,34 @@ class ADCSWAN:
 
     @property
     def mesh_x(self) -> np.ndarray:
-        """ return mesh_x (longitude) """
+        """Return mesh longitudes."""
         return self._mesh_x
+
     @mesh_x.setter
     def mesh_x(self, new_mesh_x: Union[np.ndarray, list]):
-        """ set mesh_x """
+        """Set mesh longitudes."""
         if len(new_mesh_x) != len(self.mesh_x):
             raise ValueError("New longitude array must match existing size.")
         self._mesh_x = np.asarray(new_mesh_x)
 
     @property
     def mesh_y(self) -> np.ndarray:
-        """ return mesh_y (latitude) """
+        """Return mesh latitudes."""
         return self._mesh_y
+
     @mesh_y.setter
     def mesh_y(self, new_mesh_y: Union[np.ndarray, list]):
-        """ set mesh_y """
+        """Set mesh latitudes."""
         if len(new_mesh_y) != len(self.mesh_y):
             raise ValueError("New latitude array must match existing size.")
         self._mesh_y = np.asarray(new_mesh_y)
 
     @property
     def mesh_depth(self) -> np.ndarray:
-        """ return mesh_depth """
+        """Return mesh node depths."""
         return self._mesh_depth
 
     @property
     def files(self) -> List[str]:
-        """ return file list (will contain 0 or 1 file) """
+        """Return the model file path (a list with 0 or 1 item)."""
         return self._files

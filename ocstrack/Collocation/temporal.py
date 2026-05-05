@@ -1,5 +1,7 @@
 """Functions for temporal collocation"""
 
+from typing import Tuple
+
 import numpy as np
 import xarray as xr
 
@@ -8,7 +10,7 @@ def temporal_nearest(ds_obs: xr.Dataset,
                      model_times: np.ndarray,
                      buffer: np.timedelta64,
                      time_coord_name: str = 'time'
-                     ) -> tuple[xr.Dataset, np.ndarray, np.ndarray]:
+                     ) -> Tuple[xr.Dataset, np.ndarray, np.ndarray]:
     """
     Match observations observations to the nearest model timestamps.
 
@@ -48,7 +50,7 @@ def temporal_interpolated(ds_obs: xr.Dataset,
                           model_times: np.ndarray,
                           buffer: np.timedelta64,
                           time_coord_name: str = 'time'
-                          ) -> tuple[xr.Dataset, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                          ) -> Tuple[xr.Dataset, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Perform linear time interpolation using surrounding model timestamps.
 

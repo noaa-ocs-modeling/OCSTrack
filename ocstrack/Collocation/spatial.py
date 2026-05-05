@@ -1,8 +1,9 @@
 """Functions for spatial collocation"""
 
+from typing import List, Tuple
+
 import numpy as np
 from scipy.spatial import KDTree
-from typing import List, Tuple
 
 
 def lat_lon_to_cartesian_vec(latitude: np.ndarray,
@@ -54,13 +55,22 @@ def inverse_distance_weights(distances: np.ndarray,
     -------
     np.ndarray
         Normalized inverse distance weights of shape (N, k)
-
+    
     Notes
     -----
-    A small epsilon (1e-6) is used to avoid division by zero.
+    If a distance is exactly 0, its weight becomes 1 and all others 0.
     """
-    safe_distances = np.maximum(distances, 1e-6) #to avoid division by zero
-    weights = 1.0 / np.power(safe_distances, power)
+    # Check for zero distances
+    is_zero = (distances == 0)
+    if np.any(is_zero):
+        # If a point is at the exact same location, its weight is 1, others are 0
+        # Create a zero-filled array and place 1s where distance was 0
+        weights = np.zeros_like(distances)
+        weights[is_zero] = 1.0
+        return weights
+    
+    # Original calculation for non-zero distances
+    weights = 1.0 / np.power(distances, power)
     return weights / weights.sum(axis=1, keepdims=True)
 
 class GeocentricSpatialLocator:

@@ -1,15 +1,14 @@
 """ Downlaod and pre-process Satellite Altimetry data """
 
-import os
-import requests
 import logging
+import os
 import shutil
 import time
-
-import xarray as xr
-
 from datetime import datetime, timedelta
 from typing import Union, Optional, List
+
+import requests
+import xarray as xr
 from tqdm import tqdm
 
 from .urls import URL_TEMPLATES
