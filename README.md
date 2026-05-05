@@ -1,4 +1,4 @@
-# OCSTrack: Ocean-Model-Satellite Collocation Tools
+# OCSTrack: Ocean-Model-Data Collocation Tools
 
 [![CI/CD](https://github.com/noaa-ocs-modeling/OCSTrack/actions/workflows/lint.yml/badge.svg)](https://github.com/noaa-ocs-modeling/OCSTrack/actions/workflows/lint.yml)
 [![PyPI version](https://badge.fury.io/py/ocstrack.svg)](https://badge.fury.io/py/ocstrack)
@@ -65,8 +65,6 @@ print(collocated_dataset)
 ## Documentation
 
 For more detailed examples and the full API reference, please see our documentation website (coming soon).
-
-**Note on Badges**: The PyPI version badge is active. The CI/CD badge will become active once you commit the `.github/workflows/lint.yml` file and push it to your `main` branch.
 
 ## Contributing
 
