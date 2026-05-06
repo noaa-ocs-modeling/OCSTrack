@@ -30,7 +30,7 @@ jobs:
 
       - name: Run Pylint
         run: |
-          python -m pylint OCSTrack/ocstrack
+          python -m pylint ocstrack
           
       - name: Run Pytest and Generate Coverage Report
         run: |
