@@ -9,6 +9,8 @@ jobs:
   # --- JOB 1: RUN PYLINT --- #
   lint:
     runs-on: ubuntu-latest  # No need to run on all OSs
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
     - name: Check out code
       uses: actions/checkout@v4
@@ -33,6 +35,8 @@ jobs:
   # --- JOB 2: RUN TESTS --- #
   test:
     runs-on: ${{ matrix.os }}
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
