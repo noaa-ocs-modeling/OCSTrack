@@ -1,8 +1,48 @@
 site_name: OCSTrack
+site_description: "Ocean-Model-Data Collocation Tools"
+site_author: "NOAA OCS"
+
 theme:
   name: material
+  palette:
+    - scheme: default
+      primary: "indigo"
+      accent: "indigo"
+    - scheme: slate
+      primary: "blue"
+      accent: "blue"
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - toc.integrate
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.tabs.link
+    - content.code.annotation
+    - content.code.copy
+  logo: "https://www.noaa.gov/sites/default/files/styles/crop_3_2/public/2021-10/noaa-primary-logo-rgb-2021.jpeg?itok=zYJ33u3f"
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/noaa-ocs-modeling
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/ocstrack/
+
 plugins:
-  - mkdocstrings
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_root_heading: true
+            show_source: false
+
 nav:
   - Home: index.md
-  - API Reference: api.md
+  - API Reference:
+    - Collocation: collocation.md
+    - Model: model.md
+    - Observation: observation.md
+    - Utils: utils.md
