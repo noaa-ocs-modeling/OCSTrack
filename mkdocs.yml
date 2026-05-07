@@ -21,7 +21,6 @@ theme:
     - content.tabs.link
     - content.code.annotation
     - content.code.copy
-  logo: "https://www.noaa.gov/sites/default/files/styles/crop_3_2/public/2021-10/noaa-primary-logo-rgb-2021.jpeg?itok=zYJ33u3f"
 
 extra:
   social:
