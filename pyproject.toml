@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ocstrack"
-dynamic = ["version"]
+version = "0.2.4"
 description = "Satellite data download, crop, and collocation with model outputs"
 authors = [
     { name = "Felicio Cassalho", email = "felicio.cassalho@noaa.gov" }
@@ -32,7 +32,3 @@ dev = [
     "pytest>=6.0",
     "pylint",
 ]
-
-[tool.setuptools_scm]
-write_to = "ocstrack/_version.py"
-local_scheme = "no-local-version"
