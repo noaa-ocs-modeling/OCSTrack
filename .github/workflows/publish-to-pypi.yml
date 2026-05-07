@@ -1,13 +1,14 @@
 # .github/workflows/publish-to-pypi.yml
 #
 # This workflow builds and publishes the package to PyPI
-# every time you create a new release on GitHub.
+# every time you push a new tag that starts with 'v'.
 #
 name: Publish Python - PyPI
 
 on:
-  release:
-    types: [created]  # This is the trigger
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   deploy:
