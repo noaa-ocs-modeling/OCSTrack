@@ -35,6 +35,7 @@ Repository = "https://github.com/noaa-ocs-modeling/OCSTrack"
 dev = [
     "pytest>=6.0",
     "pylint",
+    "pytest-cov",
 ]
 
 [tool.setuptools_scm]
