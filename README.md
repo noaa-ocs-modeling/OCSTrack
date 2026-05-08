@@ -1,9 +1,9 @@
 # OCSTrack: Ocean-Model-Data Collocation Tools
 
-[![CI/CD](https://github.com/noaa-ocs-modeling/OCSTrack/actions/workflows/lint.yml/badge.svg)](https://github.com/noaa-ocs-modeling/OCSTrack/actions/workflows/lint.yml)
+[![CI](https://github.com/noaa-ocs-modeling/OCSTrack/actions/workflows/ci.yml/badge.svg)](https://github.com/noaa-ocs-modeling/OCSTrack/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/ocstrack.svg)](https://badge.fury.io/py/ocstrack)
 [![codecov](https://codecov.io/gh/noaa-ocs-modeling/OCSTrack/graph/badge.svg?token=YOUR_CODECOV_TOKEN_IF_PRIVATE)](https://codecov.io/gh/noaa-ocs-modeling/OCSTrack)
-[![Pylint Score](https://img.shields.io/badge/pylint-8.11-blue)](https://github.com/noaa-ocs-modeling/OCSTrack/actions/workflows/lint.yml)
+[![Pylint Score](https://noaa-ocs-modeling.github.io/OCSTrack/pylint.svg?raw=1)](https://github.com/noaa-ocs-modeling/OCSTrack/actions/workflows/ci.yml)
 [![License: CC0-1.0](https://img.shields.io/badge/License-CC0%201.0-lightgrey.svg)](http://creativecommons.org/publicdomain/zero/1.0/)
 
 **OCSTrack** is an object-oriented Python package for the along-track collocation of satellite (2D) and Argo Float (3D) data with ocean circulation and wave model outputs. It simplifies the process of aligning diverse datasets, making it easier to compare and validate model simulations against observational data.
