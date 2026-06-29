@@ -844,7 +844,7 @@ class Collocate:
 
         # Logic for radius search (nodes is 1D)
         if self.search_radius is not None:
-            if self.temporal_interp:
+            if isinstance(times_or_inds, tuple):
                 ib, ia, wts = times_or_inds
                 for i, nd in enumerate(nodes): # nodes is flat 1D array
                     v0 = model_data[ib[i], nd]
@@ -859,7 +859,7 @@ class Collocate:
 
         # Logic for k-nearest (nodes is 2D)
         else:
-            if self.temporal_interp:
+            if isinstance(times_or_inds, tuple):
                 ib, ia, wts = times_or_inds
                 # This handles nodes being shape (n_obs, k_nearest)
                 for i in range(len(ib)):
