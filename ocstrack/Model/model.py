@@ -576,3 +576,227 @@ class ADCSWAN:
     def files(self) -> List[str]:
         """Return the model file path (a list with 0 or 1 item)."""
         return self._files
+
+
+class WW3:
+    """
+    WaveWatchIII (WW3) model interface.
+
+    Handles selection, filtering, and loading of model outputs from a WW3 run directory.
+    This assumes a run directory structure where:
+    .
+    ├── RunDir
+        ├── yyyymmdd.hhmmss.out_grd.ww3.nc
+        └── ...
+
+    Methods
+    -------
+    load_variable(path)
+        Load model variable from a NetCDF file
+    """
+    def __init__(self, rundir: str,
+                 model_dict: dict,
+                 start_date: np.datetime64,
+                 end_date: np.datetime64):
+        """
+        Initialize a WW3 model run
+
+        Parameters
+        ----------
+        rundir : str
+            Path to the WW3 model run directory
+        model_dict : dict
+            Dictionary with keys: 'var', 'var_type'
+        start_date : np.datetime64
+            Start of the time range for selecting model files
+        end_date : np.datetime64
+            End of the time range for selecting model files
+        """
+        self.rundir = rundir
+        self.model_dict = model_dict
+        self.start_date = np.datetime64(start_date)
+        self.end_date = np.datetime64(end_date)
+        self.output_dir = self.rundir
+
+        self._validate_model_dict()
+        self._files = self._select_model_files()
+
+        if self._files:
+            self._mesh_path = self._files[0]
+            self._mesh_x, self._mesh_y, self._mesh_depth = self._load_mesh_data(self._mesh_path)
+            _logger.info(f"WW3 mesh loaded from {self._mesh_path}")
+        else:
+            self._mesh_path = None
+            self._mesh_x, self._mesh_y, self._mesh_depth = (np.array([]),
+                                                            np.array([]),
+                                                            np.array([]))
+            _logger.warning("No WW3 file found, mesh could not be loaded.")
+
+    def _validate_model_dict(self) -> None:
+        """
+        Ensure the model_dict contains all required keys.
+
+        Raises
+        ------
+        ValueError
+            If required keys are missing from model_dict
+        """
+        required_keys = ['var']
+        missing = [k for k in required_keys if k not in self.model_dict]
+        if missing:
+            raise ValueError(f"Missing keys in model_dict: {missing}")
+
+    def _select_model_files(self) -> List[str]:
+        """
+        Select NetCDF output files within the specified time range.
+
+        Returns
+        -------
+        List[str]
+            List of file paths to model outputs that overlap with the requested time window
+        """
+        if not os.path.isdir(self.output_dir):
+            _logger.warning(f"Output directory {self.output_dir} does not exist.")
+            return []
+
+        all_files = [f for f in os.listdir(self.output_dir)
+                     if f.endswith(".out_grd.ww3.nc")]
+        all_files.sort()
+
+        selected = []
+        for fname in all_files:
+            fpath = os.path.join(self.output_dir, fname)
+            try:
+                with xr.open_dataset(fpath, decode_times=False) as ds:
+                    if 'time' not in ds.variables:
+                        continue
+                    times = ds['time'].values
+                    times = xr.decode_cf(ds[['time']])['time'].values
+
+                    if times[-1] >= self.start_date and times[0] <= self.end_date:
+                        selected.append(fpath)
+            except Exception as e:
+                _logger.warning(f"Error reading {fpath}: {e}")
+                continue
+
+        if not selected:
+            _logger.warning(f"No files matched pattern in {self.output_dir}.\n"
+            f"Make sure the model files fall within {self.start_date} and {self.end_date} ")
+        return selected
+
+    def _load_mesh_data(self, filepath: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Parse the WW3 NetCDF file to extract node coordinates.
+        It is assumed that WW3 is an unstructured grid with 'longitude' and 'latitude' variables.
+        Depth is not available in WW3 output, so it is returned as an array of NaNs.
+        """
+        _logger.debug(f"Loading mesh data from {filepath}")
+        try:
+            with xr.open_dataset(filepath) as ds:
+                lons = ds['lon'].load().values.squeeze()
+                lats = ds['lat'].load().values.squeeze()
+                depths = np.full_like(lons, np.nan)
+            return lons, lats, depths
+        except Exception as e:
+            _logger.error(f"Failed to load mesh data from {filepath}: {e}")
+            return np.array([]), np.array([]), np.array([])
+
+    def load_variable(self, path: str) -> xr.DataArray:
+        """
+        Load the specified variable from a model NetCDF file.
+
+        Parameters
+        ----------
+        path : str
+            Path to the NetCDF file to open
+
+        Returns
+        -------
+        xr.DataArray
+            The requested variable, sliced by time.
+        """
+        _logger.info("Opening model file: %s", path)
+        try:
+            ds = xr.open_dataset(path)
+            var = ds[self.model_dict['var']]
+            time_slice = slice(self.start_date, self.end_date)
+            var_sliced = var.sel(time=time_slice)
+            var_loaded = var_sliced.load()
+            ds.close()
+
+            return var_loaded
+        except KeyError:
+            _logger.error(f"Variable '{self.model_dict['var']}' not found in {path}")
+            ds.close()
+            raise
+        except Exception as e:
+            _logger.error(f"Error loading variable from {path}: {e}")
+            if 'ds' in locals():
+                ds.close()
+            raise
+
+    @property
+    def mesh_x(self) -> np.ndarray:
+        """Return mesh longitudes."""
+        return self._mesh_x
+
+    @mesh_x.setter
+    def mesh_x(self, new_mesh_x: Union[np.ndarray, list]):
+        """Set mesh longitudes."""
+        if len(new_mesh_x) != len(self.mesh_x):
+            raise ValueError("New longitude array must match existing size.")
+        self._mesh_x = np.asarray(new_mesh_x)
+
+    @property
+    def mesh_y(self) -> np.ndarray:
+        """Return mesh latitudes."""
+        return self._mesh_y
+
+    @mesh_y.setter
+    def mesh_y(self, new_mesh_y: Union[np.ndarray, list]):
+        """Set mesh latitudes."""
+        if len(new_mesh_y) != len(self.mesh_y):
+            raise ValueError("New latitude array must match existing size.")
+        self._mesh_y = np.asarray(new_mesh_y)
+
+    @property
+    def mesh_depth(self) -> np.ndarray:
+        """Return mesh node depths."""
+        return self._mesh_depth
+
+    @property
+    def files(self) -> List[str]:
+        """Return the list of selected model output files."""
+        return self._files
+
+    @property
+    def time(self) -> np.ndarray:
+        """
+        Return the concatenated time array for all selected files.
+
+        The time array is cached after the first call.
+        """
+        if self._time is not None:
+            return self._time
+        if not self.files:
+            return np.array([])
+
+        all_times = []
+        for fpath in self.files:
+            try:
+                with xr.open_dataset(fpath) as ds:
+                    if 'time' in ds:
+                        t = ds['time'].values
+                        if not np.issubdtype(t.dtype, np.datetime64):
+                             t = xr.decode_cf(ds[['time']])['time'].values
+                        all_times.append(t)
+            except Exception as e:
+                print(f"Warning: Could not read time from {fpath}: {e}")
+
+        if all_times:
+            self._time = np.concatenate(all_times)
+            self._time.sort()
+        else:
+            self._time = np.array([])
+
+        return self._time

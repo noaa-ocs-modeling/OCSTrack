@@ -13,7 +13,7 @@
 ## Key Features
 
 - **Automated Data Fetching**: Downloads satellite altimetry and Argo float data from public repositories.
-- **Model Support**: Natively handles outputs from SCHISM (and WWM), ADCIRC, and SWAN models.
+- **Model Support**: Natively handles outputs from SCHISM (and WWM), ADCIRC, SWAN, and WW3 models.
 - **Flexible Collocation**: Performs temporal and spatial collocation for both 2D surface tracks and 3D profiles.
 - **Efficient & Scalable**: Uses `xarray` and `dask` for efficient, out-of-core computations on large datasets.
 - **Customizable**: Object-oriented design makes it easy to extend support for new models or observational data types.
