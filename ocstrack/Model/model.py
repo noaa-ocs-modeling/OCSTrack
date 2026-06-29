@@ -618,6 +618,8 @@ class WW3:
         self.end_date = np.datetime64(end_date)
         self.output_dir = self.rundir
 
+        self._time = None
+
         self._validate_model_dict()
         self._files = self._select_model_files()
 
