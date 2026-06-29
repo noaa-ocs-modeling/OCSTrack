@@ -721,6 +721,8 @@ class WW3:
         try:
             ds = xr.open_dataset(path)
             var = ds[self.model_dict['var']]
+            if 'ny' in var.dims:
+                var = var.squeeze('ny')
             time_slice = slice(self.start_date, self.end_date)
             var_sliced = var.sel(time=time_slice)
             var_loaded = var_sliced.load()
