@@ -194,8 +194,7 @@ class SCHISM:
                 continue
             # selected.append(os.path.join(self.output_dir, fname))
         if not selected:
-            _logger.warning(f"No files matched pattern in {self.output_dir}.
-"
+            _logger.warning(f"No files matched pattern in {self.output_dir}.\n"
             f"Make sure the model files fall within {self.start_date} and {self.end_date} ")
         return selected
 
@@ -683,8 +682,7 @@ class WW3:
                 continue
 
         if not selected:
-            _logger.warning(f"No files matched pattern in {self.output_dir}.
-"
+            _logger.warning(f"No files matched pattern in {self.output_dir}.\n"
             f"Make sure the model files fall within {self.start_date} and {self.end_date} ")
         return selected
 
