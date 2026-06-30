@@ -13,7 +13,7 @@
 ## Key Features
 
 - **Automated Data Fetching**: Downloads satellite altimetry and Argo float data from public repositories.
-- **Model Support**: Natively handles outputs from SCHISM (and WWM), ADCIRC, and SWAN models.
+- **Model Support**: Natively handles outputs from SCHISM (and WWM), ADCIRC, SWAN, and WW3 models.
 - **Flexible Collocation**: Performs temporal and spatial collocation for both 2D surface tracks and 3D profiles.
 - **Efficient & Scalable**: Uses `xarray` and `dask` for efficient, out-of-core computations on large datasets.
 - **Customizable**: Object-oriented design makes it easy to extend support for new models or observational data types.
@@ -76,6 +76,16 @@ We welcome contributions! If you have ideas for new features, find a bug, or wou
 ## License
 
 This project is licensed under the terms of the CC0 1.0 Universal license. See the `LICENSE.txt` file for details.
+
+## How to Cite
+
+If you use OCSTrack for 3D collocation with Argo floats, please cite:
+
+Cassalho, F., S. Mani, S. Moghimi, F. Ye, and Y. J. Zhang. "OCSMesh and an automated creek-to-ocean mesh generation workflow." *Ocean Modelling* 203 (2026): 102774. https://doi.org/10.1016/j.ocemod.2026.102774.
+
+If you use OCSTrack for 2D collocation with satellite altimetry, please cite:
+
+Cassalho, F., A. L. Kurapov, S. Moghimi, S. M. Durski, J. Y. Zhang, A. Abdolali, et al. "Tidal modulation of waves around the Aleutian Islands." *Journal of Geophysical Research: Oceans* 131 (2026): e2025JC023780. https://doi.org/10.1029/2025JC023780.
 
 
 ---

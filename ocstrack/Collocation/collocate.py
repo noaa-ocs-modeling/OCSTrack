@@ -259,13 +259,15 @@ class Collocate:
             m_var = self.model.load_variable(path)
             m_times = m_var["time"].values
 
-            if self.temporal_interp:
+            if self.temporal_interp and len(m_times) >= 2:
                 obs_sub, ib, ia, wts, tdel = temporal_interpolated(self.obs.ds,
                                                                    m_times,
                                                                    self.time_buffer,
                                                                    self.obs_time_coord)
                 time_args = (ib, ia, wts)
             else:
+                if self.temporal_interp:
+                    _logger.warning(f"Cannot perform temporal interpolation for {path} as it has less than 2 timesteps. Falling back to nearest neighbor.")
                 obs_sub, idx, tdel = temporal_nearest(self.obs.ds,
                                                       m_times,
                                                       self.time_buffer,
@@ -842,7 +844,7 @@ class Collocate:
 
         # Logic for radius search (nodes is 1D)
         if self.search_radius is not None:
-            if self.temporal_interp:
+            if isinstance(times_or_inds, tuple):
                 ib, ia, wts = times_or_inds
                 for i, nd in enumerate(nodes): # nodes is flat 1D array
                     v0 = model_data[ib[i], nd]
@@ -857,7 +859,7 @@ class Collocate:
 
         # Logic for k-nearest (nodes is 2D)
         else:
-            if self.temporal_interp:
+            if isinstance(times_or_inds, tuple):
                 ib, ia, wts = times_or_inds
                 # This handles nodes being shape (n_obs, k_nearest)
                 for i in range(len(ib)):
