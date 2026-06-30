@@ -18,20 +18,19 @@ def ww3_test_data(tmpdir_factory):
     start_date = datetime(2023, 1, 1)
     for i in range(5):
         date = start_date + timedelta(days=i)
-        time = [date]
+        time_val = [date]
         filepath = rundir.join(f"{date.strftime('%Y%m%d')}.000000.out_grd.ww3.nc")
 
         ds = xr.Dataset(
             {
-                "time": (("time",), time),
                 "lon": (("ny", "nx"), [lon]),
                 "lat": (("ny", "nx"), [lat]),
-                "HS": (("time", "ny", "nx"), [[[np.random.rand(nx)]]]),
+                "HS": (("time", "ny", "nx"), [[np.random.rand(nx)]]),
             },
             coords={
-                "time": time,
-                "ny": [0],
-                "nx": np.arange(nx),
+                "time": ("time", time_val),
+                "ny": ("ny", [0]),
+                "nx": ("nx", np.arange(nx)),
             },
         )
         ds.to_netcdf(filepath)
