@@ -1241,6 +1241,9 @@ class ROMS:
                 },
                 coords=ds.coords
             )
+            # Stack dimensions and rename to be compatible with Collocate class
+            ds_out = ds_out.stack(nSCHISM_hgrid_node=('eta_rho', 'xi_rho'))
+            ds_out = ds_out.rename({'ocean_time': 'time'})
             return ds_out
 
     @property
