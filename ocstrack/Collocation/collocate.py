@@ -370,7 +370,12 @@ class Collocate:
                 _logger.warning(f"Skipping file {f_main_path} due to load error: {e}")
                 continue
 
-            m_times = m_data["time"].values
+            if "time" in m_data:
+                m_times = m_data["time"].values
+            elif "ocean_time" in m_data:
+                m_times = m_data["ocean_time"].values
+            else:
+                raise ValueError("Could not find time variable in model data.")
 
             # 1. Temporal Collocation (find Argo profiles for *this* file)
             if self.temporal_interp:
