@@ -341,7 +341,7 @@ class Collocate:
         zcor_var = self.model.model_dict['zcor_var']
 
         # Map model var name to argo var name
-        obs_var_map = {'temperature': 'temp', 'salinity': 'psal'}
+        obs_var_map = {'temperature': 'temp', 'salinity': 'psal', 'temp': 'temp'}
         obs_var = obs_var_map.get(main_var)
         if obs_var is None:
             raise ValueError(f"No Argo variable mapping for model var '{main_var}'")
