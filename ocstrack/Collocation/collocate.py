@@ -341,7 +341,7 @@ class Collocate:
         zcor_var = self.model.model_dict['zcor_var']
 
         # Map model var name to argo var name
-        obs_var_map = {'temperature': 'temp', 'salinity': 'psal'}
+        obs_var_map = {'temperature': 'temp', 'salinity': 'psal', 'temp': 'temp'}
         obs_var = obs_var_map.get(main_var)
         if obs_var is None:
             raise ValueError(f"No Argo variable mapping for model var '{main_var}'")
@@ -370,7 +370,12 @@ class Collocate:
                 _logger.warning(f"Skipping file {f_main_path} due to load error: {e}")
                 continue
 
-            m_times = m_data["time"].values
+            if "time" in m_data:
+                m_times = m_data["time"].values
+            elif "ocean_time" in m_data:
+                m_times = m_data["ocean_time"].values
+            else:
+                raise ValueError("Could not find time variable in model data.")
 
             # 1. Temporal Collocation (find Argo profiles for *this* file)
             if self.temporal_interp:
@@ -567,8 +572,9 @@ class Collocate:
             # 3. Vertical-then-Horizontal Interpolation
             model_profiles_at_argo_depths = np.full((self.n_nearest, n_valid_levels), np.nan)
             for k in range(self.n_nearest):
-                model_zcor_k = model_zcor_at_nodes[k, :]
-                model_var_k = model_var_at_nodes[k, :]
+                model_zcor_k = model_zcor_at_nodes[:, k]
+                model_var_k = model_var_at_nodes[:, k]
+
                 valid_model = ~np.isnan(model_zcor_k) & ~np.isnan(model_var_k)
                 if not np.any(valid_model):
                     continue

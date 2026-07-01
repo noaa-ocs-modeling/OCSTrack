@@ -1,4 +1,4 @@
-""" Module for handling the Model data """
+''' Module for handling the Model data '''
 
 import logging
 import os
@@ -639,7 +639,7 @@ class WW3:
         Ensure the model_dict contains all required keys.
 
         Raises
-        ------
+        -------
         ValueError
             If required keys are missing from model_dict
         """
@@ -793,6 +793,497 @@ class WW3:
                         t = ds['time'].values
                         if not np.issubdtype(t.dtype, np.datetime64):
                              t = xr.decode_cf(ds[['time']])['time'].values
+                        all_times.append(t)
+            except Exception as e:
+                print(f"Warning: Could not read time from {fpath}: {e}")
+
+        if all_times:
+            self._time = np.concatenate(all_times)
+            self._time.sort()
+        else:
+            self._time = np.array([])
+
+        return self._time
+
+def stretching(Vstr, thts, thtb, hc, N, kgrid):
+    """
+     STRETCHING:  Compute ROMS vertical coordinate stretching function
+
+     [s,C]=stretching(Vstretching, theta_s, theta_b, hc, N, kgrid, report)
+
+     Given vertical terrain-following vertical stretching parameters, this
+     routine computes the vertical stretching function used in ROMS vertical
+     coordinate transformation. Check the following link for details:
+
+        https://www.myroms.org/wiki/index.php/Vertical_S-coordinate
+
+     On Input:
+
+        Vstretching   Vertical stretching function:
+                        Vstretching = 1,  original (Song and Haidvogel, 1994)
+                        Vstretching = 2,  A. Shchepetkin (UCLA-ROMS, 2005)
+                        Vstretching = 3,  R. Geyer BBL refinement
+                        Vstretching = 4,  A. Shchepetkin (UCLA-ROMS, 2010)
+        theta_s       S-coordinate surface control parameter (scalar)
+        theta_b       S-coordinate bottom control parameter (scalar)
+        hc            Width (m) of surface or bottom boundary layer in which
+                        higher vertical resolution is required during
+                        stretching (scalar)
+        N             Number of vertical levels (scalar)
+        kgrid         Depth grid type logical switch:
+                        kgrid = 0,        function at vertical RHO-points
+                        kgrid = 1,        function at vertical W-points
+     On Output:
+
+        s             S-coordinate independent variable, [-1 <= s <= 0] at
+                        vertical RHO- or W-points (vector)
+        C             Nondimensional, monotonic, vertical stretching function,
+                        C(s), 1D array, [-1 <= C(s) <= 0]
+
+    """
+    s=[]
+    C=[]
+
+    Np=N+1
+
+    #-----------------------------------------------------------------
+    # Compute ROMS S-coordinates vertical stretching function
+    #-----------------------------------------------------------------
+
+    # Original vertical stretching function (Song and Haidvogel, 1994).
+    if (Vstr == 1):
+        ds = 1.0/N
+
+        if (kgrid == 1):
+            Nlev = Np
+            lev  = np.linspace(0.0,N,Np)
+            s    = (lev-N)*ds
+        else:
+            Nlev = N
+            lev  = np.linspace(1.0,N,Np)-0.5
+            s    = (lev-N)*ds
+
+        if (thts > 0):
+            Ptheta = np.sinh(thts*s)/np.sinh(thts)
+            Rtheta = np.tanh(thts*(s+0.5))/(2.0*np.tanh(0.5*thts))-0.5
+            C      = (1.0-thtb)*Ptheta+thtb*Rtheta
+        else:
+            C=s
+
+    # A. Shchepetkin (UCLA-ROMS, 2005) vertical stretching function.
+    if (Vstr==2):
+        alfa = 1.0
+        beta = 1.0
+        ds   = 1.0/N
+
+        if (kgrid == 1):
+            Nlev = Np
+            lev  = np.linspace(0.0,N,Np)
+            s    = (lev-N)*ds
+        else:
+            Nlev = N
+            lev  = np.linspace(1.0,N,Np)-0.5
+            s    = (lev-N)*ds
+
+        if (thts > 0):
+            Csur = (1.0-np.cosh(thts*s))/(np.cosh(thts)-1.0)
+            if (thtb > 0):
+                Cbot   = -1.0+np.sinh(thtb*(s+1.0))/np.sinh(thtb)
+                weigth = (s+1.0)**alfa*(1.0+(alfa/beta)*(1.0-(s+1.0)**beta))
+                C      = weigth*Csur+(1.0-weigth)*Cbot
+            else:
+                C=Csur
+        else:
+            C=s
+
+    # R. Geyer BBL vertical stretching function.
+    if (Vstr==3):
+        ds   = 1.0/N
+
+        if (kgrid == 1):
+            Nlev = Np
+            lev  = np.linspace(0.0,N,Np)
+            s    = (lev-N)*ds
+        else:
+            Nlev = N
+            lev  = np.linspace(1.0,N,Np)-0.5
+            s    = (lev-N)*ds
+
+        if (thts > 0):
+            exp_s = thts   # surface stretching exponent
+            exp_b = thtb   # bottom  stretching exponent
+            alpha = 3      # scale factor for all hyperbolic functions
+            Cbot  = np.log(np.cosh(alpha*(s+1.0)**exp_b))/np.log(np.cosh(alpha))-1.0
+            Csur  = -np.log(cosh(alpha*abs(s)**exp_s))/log(cosh(alpha))
+            weight= (1-np.tanh( alpha*(s+0.5)))/2.0
+            C     = weight*Cbot+(1.0-weight)*Csur
+        else:
+            C=s
+
+    # A. Shchepetkin (UCLA-ROMS, 2010) double vertical stretching function
+    # with bottom refinement
+    if (Vstr == 4):
+        ds   = 1.0/N
+
+        if (kgrid == 1):
+            Nlev = Np
+            lev  = np.linspace(0.0,N,Np)
+            s    = (lev-N)*ds
+        else:
+            Nlev = N
+            lev  = np.linspace(1.0,N,Np)-0.5
+            s    = (lev-N)*ds
+
+        if (thts > 0):
+            Csur = (1.0-np.cosh(thts*s))/(np.cosh(thts)-1.0)
+        else:
+            Csur = -s**2
+
+        if (thtb > 0):
+            Cbot = (np.exp(thtb*Csur)-1.0)/(1.0-np.exp(-thtb))
+            C    = Cbot
+        else:
+            C    = Csur
+
+    return (s,C)
+
+
+def set_depth( Vtr, Vstr, thts, thtb, hc, N, igrid, h, zeta ):
+    """
+     Given a batymetry (h), free-surface (zeta) and terrain-following
+     parameters, this function computes the 3D depths for the requested
+     C-grid location. If the free-surface is not provided, a zero value
+     is assumed resulting in unperturb depths.  This function can be
+     used when generating initial conditions or climatology data for
+     an application. Check the following link for details:
+
+        https://www.myroms.org/wiki/index.php/Vertical_S-coordinate
+
+     On Input:
+
+        Vtransform    Vertical transformation equation:
+
+                        Vtransform = 1,   original transformation
+
+                        z(x,y,s,t)=Zo(x,y,s)+zeta(x,y,t)*[1+Zo(x,y,s)/h(x,y)]
+
+                        Zo(x,y,s)=hc*s+[h(x,y)-hc]*C(s)
+
+                        Vtransform = 2,   new transformation
+
+                        z(x,y,s,t)=zeta(x,y,t)+[zeta(x,y,t)+h(x,y)]*Zo(x,y,s)
+
+                        Zo(x,y,s)=[hc*s(k)+h(x,y)*C(k)]/[hc+h(x,y)]
+
+        Vstretching   Vertical stretching function:
+                        Vstretching = 1,  original (Song and Haidvogel, 1994)
+                        Vstretching = 2,  A. Shchepetkin (UCLA-ROMS, 2005)
+                        Vstretching = 3,  R. Geyer BBL refinement
+                        Vstretching = 4,  A. Shchepetkin (UCLA-ROMS, 2010)
+
+        theta_s       S-coordinate surface control parameter (scalar)
+
+        theta_b       S-coordinate bottom control parameter (scalar)
+
+        hc            Width (m) of surface or bottom boundary layer in which
+                        higher vertical resolution is required during
+                        stretching (scalar)
+
+        N             Number of vertical levels (scalar)
+
+        igrid         Staggered grid C-type (integer):
+                        igrid=1  => density points
+                        igrid=2  => streamfunction points
+                        igrid=3  => u-velocity points
+                        igrid=4  => v-velocity points
+                        igrid=5  => w-velocity points
+
+        h             Bottom depth, 2D array at RHO-points (m, positive),
+                        h(1:Lp+1,1:Mp+1)
+
+        zeta          Free-surface, 2D array at RHO-points (m), OPTIONAL,
+                        zeta(1:Lp+1,1:Mp+1)
+
+     On Output:
+
+        z             Depths (m, negative), 3D array
+    """
+
+    Np      = N+1
+    Lp,Mp   = np.shape(h)
+    L       = Lp-1
+    M       = Mp-1
+    if (igrid==5):
+        z   = np.empty((Lp,Mp,Np))
+    else:
+        z   = np.empty((Lp,Mp,N))
+
+    hmin    = np.min(h)
+    hmax    = np.max(h)
+
+    if (igrid == 5):
+        kgrid=1
+    else:
+        kgrid=0
+
+    s,C = stretching(Vstr, thts, thtb, hc, N, kgrid);
+    #-----------------------------------------------------------------------
+    #  Average bathymetry and free-surface at requested C-grid type.
+    #-----------------------------------------------------------------------
+
+    if (igrid==1):
+        hr    = h
+        zetar = zeta
+    elif (igrid==2):
+        hp    = 0.25*(h[0:L,0:M]+h[1:Lp,0:M]+h[0:L,1:Mp]+h[1:Lp,1:Mp])
+        zetap = 0.25*(zeta[0:L,0:M]+zeta[1:Lp,0:M]+zeta[0:L,1:Mp]+zeta[1:Lp,1:Mp])
+    elif (igrid==3):
+        hu    = 0.5*(h[0:L,0:Mp]+h[1:Lp,0:Mp])
+        zetau = 0.5*(zeta[0:L,0:Mp]+zeta[1:Lp,0:Mp])
+    elif (igrid==4):
+        hv    = 0.5*(h[0:Lp,0:M]+h[0:Lp,1:Mp])
+        zetav = 0.5*(zeta[0:Lp,0:M]+zeta[0:Lp,1:Mp])
+    elif (igrid==5):
+        hr    = h
+        zetar = zeta
+
+    #----------------------------------------------------------------------
+    # Compute depths (m) at requested C-grid location.
+    #----------------------------------------------------------------------
+    if (Vtr == 1):
+        if (igrid==1):
+            for k in range (0,N):
+                z0 = (s[k]-C[k])*hc + C[k]*hr
+                z[:,:,k] = z0 + zetar*(1.0 + z0/hr)
+        elif (igrid==2):
+            for k in range (0,N):
+                z0 = (s[k]-C[k])*hc + C[k]*hp
+                z[:,:,k] = z0 + zetap*(1.0 + z0/hp)
+        elif (igrid==3):
+            for k in range (0,N):
+                z0 = (s[k]-C[k])*hc + C[k]*hu
+                z[:,:,k] = z0 + zetau*(1.0 + z0/hu)
+        elif (igrid==4):
+            for k in range (0,N):
+                z0 = (s[k]-C[k])*hc + C[k]*hv
+                z[:,:,k] = z0 + zetav*(1.0 + z0/hv)
+        elif (igrid==5):
+            z[:,:,0] = -hr
+            for k in range (0,Np):
+                z0 = (s[k]-C[k])*hc + C[k]*hr
+                z[:,:,k] = z0 + zetar*(1.0 + z0/hr)
+    elif (Vtr==2):
+        if (igrid==1):
+            for k in range (0,N):
+                z0 = (hc*s[k]+C[k]*hr)/(hc+hr)
+                z[:,:,k] = zetar+(zeta+hr)*z0
+        elif (igrid==2):
+            for k in range (0,N):
+                z0 = (hc*s[k]+C[k]*hp)/(hc+hp)
+                z[:,:,k] = zetap+(zetap+hp)*z0
+        elif (igrid==3):
+            for k in range (0,N):
+                z0 = (hc*s[k]+C[k]*hu)/(hc+hu)
+                z[:,:,k] = zetau+(zetau+hu)*z0
+        elif (igrid==4):
+            for k in range (0,N):
+                z0 = (hc*s[k]+C[k]*hv)/(hc+hv)
+                z[:,:,k] = zetav+(zetav+hv)*z0
+        elif (igrid==5):
+            for k in range (0,Np):
+                z0 = (hc*s[k]+C[k]*hr)/(hc+hr)
+                z[:,:,k] = zetar+(zetar+hr)*z0
+
+    return z
+
+class ROMS:
+    """
+    ROMS model interface.
+    """
+    def __init__(self, rundir: str, model_dict: dict, start_date: np.datetime64, end_date: np.datetime64):
+        self.rundir = rundir
+        self.model_dict = model_dict
+        self.start_date = np.datetime64(start_date)
+        self.end_date = np.datetime64(end_date)
+        self.output_dir = os.path.join(self.rundir, "HIS")
+
+        self._time = None
+        self.Vtransform = None
+        self.Vstretching = None
+        self.theta_s = None
+        self.theta_b = None
+        self.hc = None
+        self.N = None
+        self.grdname = None
+
+        self._parse_ocean_in()
+        self._validate_model_dict()
+        self._files = self._select_model_files()
+        self._load_mesh_data()
+
+    def _parse_ocean_in(self):
+        """Parse the ocean.in file to get vertical coordinate parameters."""
+        ocean_in_path = os.path.join(self.rundir, "ocean.in")
+        if not os.path.exists(ocean_in_path):
+            raise FileNotFoundError("ocean.in not found in the run directory.")
+
+        with open(ocean_in_path, "r") as f:
+            for line in f:
+                sline = line.strip()
+                if not sline or sline.startswith("!"):
+                    continue
+
+                line_no_comment = sline.split("!")[0]
+                parts = line_no_comment.replace("==", "=").split("=")
+                if len(parts) != 2:
+                    continue
+
+                keyword = parts[0].strip()
+                value_str = parts[1].strip()
+
+                if keyword == "Vtransform":
+                    self.Vtransform = int(float(value_str.replace("d", "e")))
+                elif keyword == "Vstretching":
+                    self.Vstretching = int(float(value_str.replace("d", "e")))
+                elif keyword == "THETA_S":
+                    self.theta_s = float(value_str.replace("d", "e"))
+                elif keyword == "THETA_B":
+                    self.theta_b = float(value_str.replace("d", "e"))
+                elif keyword == "TCLINE":
+                    self.hc = float(value_str.replace("d", "e"))
+                elif keyword == "N":
+                    self.N = int(float(value_str.replace("d", "e")))
+                elif keyword == "GRDNAME":
+                    self.grdname = value_str
+
+
+    def _validate_model_dict(self):
+        """Validate the model_dict."""
+        required_keys = ['var', 'var_type']
+        missing = [k for k in required_keys if k not in self.model_dict]
+        if missing:
+            raise ValueError(f"Missing keys in model_dict: {missing}")
+
+    def _select_model_files(self):
+        """Select model files."""
+        if not os.path.isdir(self.output_dir):
+            _logger.warning(f"Output directory {self.output_dir} does not exist.")
+            return []
+
+        all_files = [f for f in os.listdir(self.output_dir) if f.startswith("roms_his_") and f.endswith(".nc")]
+        all_files.sort(key=natural_sort_key)
+
+        selected = []
+        for fname in all_files:
+            fpath = os.path.join(self.output_dir, fname)
+            try:
+                with xr.open_dataset(fpath, decode_times=False) as ds:
+                    if 'ocean_time' not in ds.variables:
+                        continue
+                    times = ds['ocean_time'].values
+                    times = xr.decode_cf(ds[['ocean_time']])['ocean_time'].values
+
+                    if times[-1] >= self.start_date and times[0] <= self.end_date:
+                        selected.append(fpath)
+            except Exception as e:
+                _logger.warning(f"Error reading {fpath}: {e}")
+                continue
+        return selected
+
+    def _load_mesh_data(self):
+        """Load mesh data."""
+        grid_file = self.grdname
+
+        if grid_file and os.path.exists(grid_file):
+            with xr.open_dataset(grid_file) as ds:
+                self._mesh_x = ds['lon_rho'].values.flatten()
+                self._mesh_y = ds['lat_rho'].values.flatten()
+                self.h = ds['h'].values
+        else:
+            if not self.files:
+                self._mesh_x, self._mesh_y, self.h = None, None, None
+                return
+
+            grid_file_attr = None
+            with xr.open_dataset(self.files[0]) as ds:
+                if 'grd_file' in ds.attrs:
+                    grid_file_attr = ds.attrs['grd_file']
+
+            if grid_file_attr and os.path.exists(grid_file_attr):
+                with xr.open_dataset(grid_file_attr) as ds:
+                    self._mesh_x = ds['lon_rho'].values.flatten()
+                    self._mesh_y = ds['lat_rho'].values.flatten()
+                    self.h = ds['h'].values
+            else:
+                with xr.open_dataset(self.files[0]) as ds:
+                    self._mesh_x = ds['lon_rho'].values.flatten()
+                    self._mesh_y = ds['lat_rho'].values.flatten()
+                    self.h = ds['h'].values
+
+    def load_3d_file_pair(self, f_main_path: str):
+        """Load 3D file pair."""
+        main_var = self.model_dict['var']
+        zcor_var = self.model_dict.get('zcor_var', 'z_rho')
+
+        with xr.open_dataset(f_main_path) as ds:
+            main_var_data = ds[main_var]
+            zeta_da = ds['zeta']
+
+            # Create an empty array for z_rho with the correct shape
+            z_rho_shape = (
+                len(zeta_da['ocean_time']),
+                self.N,
+                self.h.shape[0],
+                self.h.shape[1]
+            )
+            z_rho_all = np.empty(z_rho_shape)
+
+            # Loop over each time step to calculate z_rho
+            for t_idx in range(len(zeta_da['ocean_time'])):
+                zeta_t = zeta_da.isel(ocean_time=t_idx).values
+                z_rho_t = set_depth(self.Vtransform, self.Vstretching, self.theta_s, self.theta_b, self.hc, self.N, 1, self.h, zeta_t)
+                # The output of set_depth is (eta, xi, s_rho), so we need to transpose it
+                z_rho_all[t_idx, :, :, :] = np.transpose(z_rho_t, (2, 0, 1))
+
+            ds_out = xr.Dataset(
+                {
+                    main_var: main_var_data,
+                    zcor_var: (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), z_rho_all)
+                },
+                coords=ds.coords
+            )
+            # Stack dimensions and rename to be compatible with Collocate class
+            ds_out = ds_out.stack(nSCHISM_hgrid_node=('eta_rho', 'xi_rho'))
+            ds_out = ds_out.rename({'ocean_time': 'time'})
+            return ds_out
+
+    @property
+    def mesh_x(self):
+        return self._mesh_x
+
+    @property
+    def mesh_y(self):
+        return self._mesh_y
+
+    @property
+    def files(self):
+        return self._files
+
+    @property
+    def time(self):
+        if self._time is not None:
+            return self._time
+        if not self.files:
+            return np.array([])
+
+        all_times = []
+        for fpath in self.files:
+            try:
+                with xr.open_dataset(fpath) as ds:
+                    if 'ocean_time' in ds:
+                        t = ds['ocean_time'].values
+                        if not np.issubdtype(t.dtype, np.datetime64):
+                             t = xr.decode_cf(ds[['ocean_time']])['ocean_time'].values
                         all_times.append(t)
             except Exception as e:
                 print(f"Warning: Could not read time from {fpath}: {e}")
