@@ -585,13 +585,6 @@ class Collocate:
                 model_zcor_k_sorted = model_zcor_k_valid[sort_idx_model]
                 model_var_k_sorted = model_var_k_valid[sort_idx_model]
 
-                # DEBUGGING: Print depth ranges for the first profile and first node
-                if i == 0 and k == 0:
-                    print("--- DEBUGGING: Vertical Interpolation ---")
-                    print(f"Argo depth range: {np.min(argo_depth_sorted):.2f} to {np.max(argo_depth_sorted):.2f}")
-                    print(f"Model depth range: {np.min(model_zcor_k_sorted):.2f} to {np.max(model_zcor_k_sorted):.2f}")
-                    print("-----------------------------------------")
-
                 model_profile_k_interp = np.interp(
                     argo_depth_sorted,
                     model_zcor_k_sorted,

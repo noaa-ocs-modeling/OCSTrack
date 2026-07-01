@@ -1114,6 +1114,7 @@ class ROMS:
         self.theta_b = None
         self.hc = None
         self.N = None
+        self.grdname = None
 
         self._parse_ocean_in()
         self._validate_model_dict()
@@ -1152,6 +1153,8 @@ class ROMS:
                     self.hc = float(value_str.replace("d", "e"))
                 elif keyword == "N":
                     self.N = int(float(value_str.replace("d", "e")))
+                elif keyword == "GRDNAME":
+                    self.grdname = value_str
 
 
     def _validate_model_dict(self):
@@ -1189,14 +1192,7 @@ class ROMS:
 
     def _load_mesh_data(self):
         """Load mesh data."""
-        if not self.files:
-            self._mesh_x, self._mesh_y, self.h = None, None, None
-            return
-
-        grid_file = None
-        with xr.open_dataset(self.files[0]) as ds:
-            if 'grd_file' in ds.attrs:
-                grid_file = ds.attrs['grd_file']
+        grid_file = self.grdname
 
         if grid_file and os.path.exists(grid_file):
             with xr.open_dataset(grid_file) as ds:
@@ -1204,10 +1200,25 @@ class ROMS:
                 self._mesh_y = ds['lat_rho'].values.flatten()
                 self.h = ds['h'].values
         else:
+            if not self.files:
+                self._mesh_x, self._mesh_y, self.h = None, None, None
+                return
+
+            grid_file_attr = None
             with xr.open_dataset(self.files[0]) as ds:
-                self._mesh_x = ds['lon_rho'].values.flatten()
-                self._mesh_y = ds['lat_rho'].values.flatten()
-                self.h = ds['h'].values
+                if 'grd_file' in ds.attrs:
+                    grid_file_attr = ds.attrs['grd_file']
+
+            if grid_file_attr and os.path.exists(grid_file_attr):
+                with xr.open_dataset(grid_file_attr) as ds:
+                    self._mesh_x = ds['lon_rho'].values.flatten()
+                    self._mesh_y = ds['lat_rho'].values.flatten()
+                    self.h = ds['h'].values
+            else:
+                with xr.open_dataset(self.files[0]) as ds:
+                    self._mesh_x = ds['lon_rho'].values.flatten()
+                    self._mesh_y = ds['lat_rho'].values.flatten()
+                    self.h = ds['h'].values
 
     def load_3d_file_pair(self, f_main_path: str):
         """Load 3D file pair."""
