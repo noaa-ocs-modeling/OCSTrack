@@ -1139,7 +1139,7 @@ class ROMS:
                 elif "TCLINE" in line:
                     self.hc = float(line.split("==")[1].split("d")[0].strip())
                 elif "N ==" in line:
-                    self.N = int(line.split("==")[1].strip().split("!")[0])
+                    self.N = int(float(line.split("==")[1].strip().split("!")[0].replace("d", "e")))
 
 
     def _validate_model_dict(self):
