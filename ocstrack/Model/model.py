@@ -1216,14 +1216,28 @@ class ROMS:
 
         with xr.open_dataset(f_main_path) as ds:
             main_var_data = ds[main_var]
-            zeta = ds['zeta']
+            zeta_da = ds['zeta']
 
-            z_rho = set_depth(self.Vtransform, self.Vstretching, self.theta_s, self.theta_b, self.hc, self.N, 1, self.h, zeta.values)
-            
+            # Create an empty array for z_rho with the correct shape
+            z_rho_shape = (
+                len(zeta_da['ocean_time']),
+                self.N,
+                self.h.shape[0],
+                self.h.shape[1]
+            )
+            z_rho_all = np.empty(z_rho_shape)
+
+            # Loop over each time step to calculate z_rho
+            for t_idx in range(len(zeta_da['ocean_time'])):
+                zeta_t = zeta_da.isel(ocean_time=t_idx).values
+                z_rho_t = set_depth(self.Vtransform, self.Vstretching, self.theta_s, self.theta_b, self.hc, self.N, 1, self.h, zeta_t)
+                # The output of set_depth is (eta, xi, s_rho), so we need to transpose it
+                z_rho_all[t_idx, :, :, :] = np.transpose(z_rho_t, (2, 0, 1))
+
             ds_out = xr.Dataset(
                 {
                     main_var: main_var_data,
-                    zcor_var: (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), z_rho)
+                    zcor_var: (('ocean_time', 's_rho', 'eta_rho', 'xi_rho'), z_rho_all)
                 },
                 coords=ds.coords
             )
