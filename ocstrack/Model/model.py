@@ -1129,17 +1129,23 @@ class ROMS:
         with open(ocean_in_path, "r") as f:
             for line in f:
                 if "Vtransform" in line:
-                    self.Vtransform = int(line.split("==")[1].strip())
+                    value = line.split("==")[1].strip().split("!")[0]
+                    self.Vtransform = int(float(value.replace("d", "e")))
                 elif "Vstretching" in line:
-                    self.Vstretching = int(line.split("==")[1].strip())
+                    value = line.split("==")[1].strip().split("!")[0]
+                    self.Vstretching = int(float(value.replace("d", "e")))
                 elif "THETA_S" in line:
-                    self.theta_s = float(line.split("==")[1].split("d")[0].strip())
+                    value = line.split("==")[1].strip().split("!")[0]
+                    self.theta_s = float(value.replace("d", "e"))
                 elif "THETA_B" in line:
-                    self.theta_b = float(line.split("==")[1].split("d")[0].strip())
+                    value = line.split("==")[1].strip().split("!")[0]
+                    self.theta_b = float(value.replace("d", "e"))
                 elif "TCLINE" in line:
-                    self.hc = float(line.split("==")[1].split("d")[0].strip())
+                    value = line.split("==")[1].strip().split("!")[0]
+                    self.hc = float(value.replace("d", "e"))
                 elif "N ==" in line:
-                    self.N = int(float(line.split("==")[1].strip().split("!")[0].replace("d", "e")))
+                    value = line.split("==")[1].strip().split("!")[0]
+                    self.N = int(float(value.replace("d", "e")))
 
 
     def _validate_model_dict(self):
