@@ -574,6 +574,16 @@ class Collocate:
             for k in range(self.n_nearest):
                 model_zcor_k = model_zcor_at_nodes[k, :]
                 model_var_k = model_var_at_nodes[k, :]
+
+                # DEBUGGING: Print raw model profile
+                if i == 0 and k == 0:
+                    print("--- DEBUGGING: Raw Model Profile ---")
+                    print("Model depths (zcor):")
+                    print(model_zcor_k)
+                    print("Model variable (temp):")
+                    print(model_var_k)
+                    print("-----------------------------------")
+
                 valid_model = ~np.isnan(model_zcor_k) & ~np.isnan(model_var_k)
                 if not np.any(valid_model):
                     continue
