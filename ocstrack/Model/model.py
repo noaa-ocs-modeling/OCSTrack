@@ -1128,24 +1128,30 @@ class ROMS:
 
         with open(ocean_in_path, "r") as f:
             for line in f:
-                if "Vtransform" in line:
-                    value = line.split("==")[1].strip().split("!")[0]
-                    self.Vtransform = int(float(value.replace("d", "e")))
-                elif "Vstretching" in line:
-                    value = line.split("==")[1].strip().split("!")[0]
-                    self.Vstretching = int(float(value.replace("d", "e")))
-                elif "THETA_S" in line:
-                    value = line.split("==")[1].strip().split("!")[0]
-                    self.theta_s = float(value.replace("d", "e"))
-                elif "THETA_B" in line:
-                    value = line.split("==")[1].strip().split("!")[0]
-                    self.theta_b = float(value.replace("d", "e"))
-                elif "TCLINE" in line:
-                    value = line.split("==")[1].strip().split("!")[0]
-                    self.hc = float(value.replace("d", "e"))
-                elif "N ==" in line:
-                    value = line.split("==")[1].strip().split("!")[0]
-                    self.N = int(float(value.replace("d", "e")))
+                sline = line.strip()
+                if not sline or sline.startswith("!"):
+                    continue
+
+                line_no_comment = sline.split("!")[0]
+                parts = line_no_comment.replace("==", "=").split("=")
+                if len(parts) != 2:
+                    continue
+
+                keyword = parts[0].strip()
+                value_str = parts[1].strip()
+
+                if keyword == "Vtransform":
+                    self.Vtransform = int(float(value_str.replace("d", "e")))
+                elif keyword == "Vstretching":
+                    self.Vstretching = int(float(value_str.replace("d", "e")))
+                elif keyword == "THETA_S":
+                    self.theta_s = float(value_str.replace("d", "e"))
+                elif keyword == "THETA_B":
+                    self.theta_b = float(value_str.replace("d", "e"))
+                elif keyword == "TCLINE":
+                    self.hc = float(value_str.replace("d", "e"))
+                elif keyword == "N":
+                    self.N = int(float(value_str.replace("d", "e")))
 
 
     def _validate_model_dict(self):
