@@ -53,6 +53,43 @@ pip install "ocstrack[geo]"
 pip install "ocstrack[all]"
 ```
 
+## Profiling Float Data Sources
+
+OCSTrack supports Argo Float profile data from the IFREMER GDAC. Argo data is used for 3D collocation against ocean circulation model outputs (SCHISM, ROMS), comparing model temperature and salinity profiles against observed vertical profiles. No credentials are required.
+
+### Argo Floats (IFREMER GDAC)
+
+Profile data is downloaded by ocean region and date range. The `get_argo` function scrapes the IFREMER GDAC HTTP server, applies time filtering and optional spatial cropping, and saves individual cleaned `.nc` files to a `processed/` directory. The `ArgoData` class then loads and concatenates all processed files into a single dataset, padding profiles to a uniform number of vertical levels.
+
+```python
+from ocstrack.Observation.get_argo import get_argo
+from ocstrack.Observation.argofloat import ArgoData
+
+# Download and pre-process Argo data for a region, cropped to a shapefile
+# shape also accepts a shapely geometry or a GeoJSON dict; requires ocstrack[geo]
+get_argo(
+    start_date="2019-08-29",
+    end_date="2019-10-05",
+    region="pacific_ocean",
+    output_dir="./argo_data/",
+    shape="/path/to/domain.shp",
+)
+
+# Load the processed profiles
+argo_data = ArgoData("./argo_data/pacific_ocean/processed/")
+print(f"Profiles loaded : {argo_data.ds.sizes['JULD']}")
+print(f"Vertical levels : {argo_data.ds.sizes['N_LEVELS']}")
+print(f"Time range      : {argo_data.time.min()} to {argo_data.time.max()}")
+```
+
+**Available regions:** `atlantic_ocean`, `pacific_ocean`, `indian_ocean`, `mediterranean_sea`, `black_sea`, `caspian_sea`, `red_sea`, `baltic_sea`, and others as listed on the [IFREMER GDAC](https://data-argo.ifremer.fr/geo).
+
+**Key variables:** `PRES` / `PRES_ADJUSTED` (pressure, dbar), `TEMP` / `TEMP_ADJUSTED` (temperature, °C), `PSAL` / `PSAL_ADJUSTED` (salinity, PSU), `LATITUDE`, `LONGITUDE`, `JULD` (time). Adjusted variables are preferred automatically when available.
+
+**Depth conversion:** If the optional `gsw` package is installed (`pip install "ocstrack[gsw]"`), pressure is converted to depth using the Gibbs SeaWater toolbox for full accuracy. Otherwise a linear approximation (`depth ≈ pressure × -1.0197`) is used.
+
+---
+
 ## Satellite Data Sources
 
 OCSTrack supports two satellite altimetry data sources. Both are handled by the same `SatelliteData` class, which auto-detects the format.

@@ -21,6 +21,28 @@ from .urls import ARGO_BASE_URL
 
 _logger = logging.getLogger(__name__)
 
+# Argo metadata/QC variables dropped during loading to avoid CF-decoding
+# errors and keep only the fields needed for collocation.
+_DROP_VARS = [
+    'DATA_TYPE', 'FORMAT_VERSION', 'HANDBOOK_VERSION', 'REFERENCE_DATE_TIME',
+    'DATE_CREATION', 'DATE_UPDATE', 'PLATFORM_NUMBER', 'PROJECT_NAME',
+    'PI_NAME', 'STATION_PARAMETERS', 'DIRECTION', 'DATA_CENTRE',
+    'DC_REFERENCE', 'DATA_STATE_INDICATOR', 'DATA_MODE', 'PLATFORM_TYPE',
+    'FLOAT_SERIAL_NO', 'FIRMWARE_VERSION', 'WMO_INST_TYPE', 'JULD_QC',
+    'POSITION_QC', 'POSITIONING_SYSTEM', 'PROFILE_PRES_QC',
+    'PROFILE_TEMP_QC', 'PROFILE_PSAL_QC', 'VERTICAL_SAMPLING_SCHEME',
+    'PRES_QC', 'PRES_ADJUSTED_QC', 'TEMP_QC', 'TEMP_ADJUSTED_QC',
+    'PSAL_QC', 'PSAL_ADJUSTED_QC', 'PARAMETER', 'SCIENTIFIC_CALIB_EQUATION',
+    'SCIENTIFIC_CALIB_COEFFICIENT', 'SCIENTIFIC_CALIB_COMMENT',
+    'SCIENTIFIC_CALIB_DATE', 'HISTORY_INSTITUTION', 'HISTORY_STEP',
+    'HISTORY_SOFTWARE', 'HISTORY_SOFTWARE_RELEASE', 'HISTORY_REFERENCE',
+    'HISTORY_DATE', 'HISTORY_ACTION', 'HISTORY_PARAMETER', 'HISTORY_QCTEST',
+    'HISTORY_START_PRES', 'HISTORY_STOP_PRES', 'HISTORY_PREVIOUS_VALUE',
+    'HISTORY_DATE', 'HISTORY_ACTION', 'HISTORY_PARAMETER', 'HISTORY_QCTEST',
+    'HISTORY_INSTITUTION', 'N_HISTORY', 'CONFIG_MISSION_NUMBER', 'PRES_ADJUSTED_ERROR',
+    'TEMP_ADJUSTED_ERROR', 'PSAL_ADJUSTED_ERROR', 'CYCLE_NUMBER'
+]
+
 def generate_monthly_dates(start_date_str: str,
                            end_date_str: str) -> List[Tuple[str, str]]:
     """
@@ -63,7 +85,7 @@ def _download_file(url: str, target_path: str) -> bool:
     """
 
     try:
-        with requests.get(url, stream=True) as r:
+        with requests.get(url, stream=True, timeout=60) as r:
             r.raise_for_status()
             with open(target_path, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=8192):
@@ -137,7 +159,7 @@ def download_argo_data(year: str,
         visited_urls.add(current_url)
 
         try:
-            response = requests.get(current_url)
+            response = requests.get(current_url, timeout=60)
             response.raise_for_status()
         except requests.RequestException as e:
             _logger.warning(f"Failed to access URL {current_url}: {e}")
@@ -163,7 +185,7 @@ def download_argo_data(year: str,
                     if not start_dt <= file_date <= end_dt:
                         _logger.info(f"Skipping download (out of date range): {filename}")
                         continue # Skip this file
-                except Exception:
+                except (ValueError, IndexError):
                     _logger.warning(f"Could not parse date from {filename}. Skipping.")
                     continue
 
@@ -235,6 +257,172 @@ def crop_by_box_argo(dataset: xr.Dataset,
     return cropped
 
 
+def crop_by_shape_argo(dataset: xr.Dataset, shape) -> xr.Dataset:
+    """
+    Crop an Argo dataset to the profiles that fall within a given shape.
+
+    Accepts a shapefile path, a GeoJSON-like dict, or any shapely
+    ``Polygon`` / ``MultiPolygon`` object.
+
+    Parameters
+    ----------
+    dataset : xr.Dataset
+        Argo dataset containing ``LATITUDE`` and ``LONGITUDE`` 1-D variables
+        along the ``N_PROF`` dimension.
+    shape : str, dict, or shapely geometry
+        The bounding shape. Accepted forms:
+
+        * **str** – path to a shapefile (``.shp``). The union of all features
+          is used. Requires ``geopandas``.
+        * **dict** – a GeoJSON-like mapping with a ``"geometry"`` key *or* a
+          bare GeoJSON geometry dict (``{"type": "Polygon", "coordinates":
+          ...}``). Requires ``shapely``.
+        * **shapely Polygon / MultiPolygon** – used directly.
+
+    Returns
+    -------
+    xr.Dataset
+        A subset of *dataset* containing only the profiles whose
+        (LONGITUDE, LATITUDE) coordinates fall within the supplied shape.
+
+    Raises
+    ------
+    ImportError
+        If the required ``shapely`` or ``geopandas`` library is not installed.
+    ValueError
+        If *dataset* does not contain ``LATITUDE`` / ``LONGITUDE``, or if
+        *shape* cannot be interpreted.
+    """
+    try:
+        from shapely.geometry import shape as shapely_shape, Point
+        from shapely.ops import unary_union
+    except ImportError as exc:
+        raise ImportError(
+            "crop_by_shape_argo requires the 'shapely' package. "
+            "Install it with: pip install shapely"
+        ) from exc
+
+    if 'LATITUDE' not in dataset or 'LONGITUDE' not in dataset:
+        raise ValueError(
+            "Dataset does not contain 'LATITUDE' or 'LONGITUDE' variables."
+        )
+
+    # --- Resolve the input to a single shapely geometry ---
+    if isinstance(shape, str):
+        try:
+            import geopandas as gpd
+        except ImportError as exc:
+            raise ImportError(
+                "Passing a shapefile path to crop_by_shape_argo requires 'geopandas'. "
+                "Install it with: pip install geopandas"
+            ) from exc
+        gdf = gpd.read_file(shape)
+        geom = unary_union(gdf.geometry)
+
+    elif isinstance(shape, dict):
+        if "geometry" in shape:
+            geom = shapely_shape(shape["geometry"])
+        elif "type" in shape and "coordinates" in shape:
+            geom = shapely_shape(shape)
+        else:
+            raise ValueError(
+                "dict input must be a GeoJSON feature (with a 'geometry' key) "
+                "or a bare GeoJSON geometry dict (with 'type' and 'coordinates')."
+            )
+
+    else:
+        # Assume it is already a shapely geometry
+        geom = shape
+
+    if not hasattr(geom, 'contains'):
+        raise ValueError(
+            f"Could not interpret 'shape' as a valid geometry. Got: {type(shape)}"
+        )
+
+    # --- Vectorised point-in-polygon test ---
+    lats = dataset['LATITUDE'].values
+    lons = dataset['LONGITUDE'].values
+
+    mask = np.array(
+        [geom.contains(Point(lo, la)) for lo, la in zip(lons, lats)],
+        dtype=bool,
+    )
+
+    # Use positional integer indexing on the N_PROF dimension. This mirrors the
+    # satellite-side crop_by_shape and is robust even when N_PROF has no
+    # coordinate index (as is the case for decoded Argo files), unlike passing
+    # a plain boolean array to .sel().
+    dim = dataset['LATITUDE'].dims[0]
+    indices = np.where(mask)[0]
+
+    return dataset.isel({dim: indices})
+
+
+def crop_argo_data_by_shape(
+    file_paths: List[str],
+    cropped_dir: str,
+    shape,
+    start_date: str,
+    end_date: str,
+) -> None:
+    """
+    Load, time-filter, and crop Argo files to a polygon / shapefile.
+
+    Mirrors :func:`crop_argo_data` but uses polygon-based masking instead of
+    a bounding box. Requires the ``shapely`` package (and ``geopandas`` when
+    *shape* is a path to a ``.shp`` file).
+
+    Parameters
+    ----------
+    file_paths : List[str]
+        List of raw .nc files to process.
+    cropped_dir : str
+        Directory to save the cropped .nc files.
+    shape : str, dict, or shapely geometry
+        Bounding shape. See :func:`crop_by_shape_argo` for accepted formats.
+    start_date : str
+        ISO 8601 string for start date.
+    end_date : str
+        ISO 8601 string for end date.
+    """
+    os.makedirs(cropped_dir, exist_ok=True)
+
+    start_dt = np.datetime64(start_date)
+    end_dt = np.datetime64(end_date)
+
+    for file_path in tqdm(file_paths, desc="Cropping Argo data by shape"):
+        try:
+            with xr.open_dataset(
+                file_path,
+                engine="netcdf4",
+                decode_cf=False,
+                drop_variables=_DROP_VARS
+            ) as ds_raw:
+                ds = xr.decode_cf(ds_raw, decode_coords=False)
+
+                # Time filtering
+                if not np.issubdtype(ds['JULD'].dtype, np.datetime64):
+                    ds['JULD'] = xr.decode_cf(ds).JULD
+
+                time_mask = (ds.JULD >= start_dt) & (ds.JULD <= end_dt)
+                ds_time_filtered = ds.sel(N_PROF=time_mask)
+
+                # Shape-based spatial crop
+                cropped = crop_by_shape_argo(ds_time_filtered, shape)
+                cropped.load()
+
+            if 'N_PROF' in cropped.sizes and cropped.sizes['N_PROF'] > 0:
+                out_path = os.path.join(cropped_dir,
+                                        f"cropped_{os.path.basename(file_path)}")
+                cropped.to_netcdf(out_path)
+                _logger.info(f"Saved {out_path}")
+            else:
+                _logger.warning(f"Skipping empty cropped dataset: {file_path}")
+
+        except Exception as e:  # pylint: disable=broad-except
+            _logger.warning(f"Failed to process {file_path}: {type(e).__name__} - {e}")
+
+
 def crop_argo_data(file_paths: List[str],
                    cropped_dir: str,
                    lat_min: float,
@@ -272,26 +460,6 @@ def crop_argo_data(file_paths: List[str],
 
     os.makedirs(cropped_dir, exist_ok=True)
 
-    DROP_VARS = [
-        'DATA_TYPE', 'FORMAT_VERSION', 'HANDBOOK_VERSION', 'REFERENCE_DATE_TIME',
-        'DATE_CREATION', 'DATE_UPDATE', 'PLATFORM_NUMBER', 'PROJECT_NAME',
-        'PI_NAME', 'STATION_PARAMETERS', 'DIRECTION', 'DATA_CENTRE',
-        'DC_REFERENCE', 'DATA_STATE_INDICATOR', 'DATA_MODE', 'PLATFORM_TYPE',
-        'FLOAT_SERIAL_NO', 'FIRMWARE_VERSION', 'WMO_INST_TYPE', 'JULD_QC',
-        'POSITION_QC', 'POSITIONING_SYSTEM', 'PROFILE_PRES_QC',
-        'PROFILE_TEMP_QC', 'PROFILE_PSAL_QC', 'VERTICAL_SAMPLING_SCHEME',
-        'PRES_QC', 'PRES_ADJUSTED_QC', 'TEMP_QC', 'TEMP_ADJUSTED_QC',
-        'PSAL_QC', 'PSAL_ADJUSTED_QC', 'PARAMETER', 'SCIENTIFIC_CALIB_EQUATION',
-        'SCIENTIFIC_CALIB_COEFFICIENT', 'SCIENTIFIC_CALIB_COMMENT',
-        'SCIENTIFIC_CALIB_DATE', 'HISTORY_INSTITUTION', 'HISTORY_STEP',
-        'HISTORY_SOFTWARE', 'HISTORY_SOFTWARE_RELEASE', 'HISTORY_REFERENCE',
-        'HISTORY_DATE', 'HISTORY_ACTION', 'HISTORY_PARAMETER', 'HISTORY_QCTEST',
-        'HISTORY_START_PRES', 'HISTORY_STOP_PRES', 'HISTORY_PREVIOUS_VALUE',
-        'HISTORY_DATE', 'HISTORY_ACTION', 'HISTORY_PARAMETER','HISTORY_QCTEST',
-        'HISTORY_INSTITUTION','N_HISTORY','CONFIG_MISSION_NUMBER','PRES_ADJUSTED_ERROR',
-        'TEMP_ADJUSTED_ERROR','PSAL_ADJUSTED_ERROR','CYCLE_NUMBER'
-    ]
-
     start_dt = np.datetime64(start_date)
     end_dt = np.datetime64(end_date)
 
@@ -301,7 +469,7 @@ def crop_argo_data(file_paths: List[str],
                 file_path,
                 engine="netcdf4",
                 decode_cf=False,
-                drop_variables=DROP_VARS
+                drop_variables=_DROP_VARS
             ) as ds_raw:
                 ds = xr.decode_cf(ds_raw, decode_coords=False)
 
@@ -325,7 +493,7 @@ def crop_argo_data(file_paths: List[str],
             else:
                 _logger.warning(f"Skipping empty cropped dataset: {file_path}")
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-except
             _logger.warning(f"Failed to process {file_path}: {type(e).__name__} - {e}")
 
 def clean_argo_data(file_paths: List[str],
@@ -351,26 +519,6 @@ def clean_argo_data(file_paths: List[str],
 
     os.makedirs(clean_dir, exist_ok=True)
 
-    DROP_VARS = [
-        'DATA_TYPE', 'FORMAT_VERSION', 'HANDBOOK_VERSION', 'REFERENCE_DATE_TIME',
-        'DATE_CREATION', 'DATE_UPDATE', 'PLATFORM_NUMBER', 'PROJECT_NAME',
-        'PI_NAME', 'STATION_PARAMETERS', 'DIRECTION', 'DATA_CENTRE',
-        'DC_REFERENCE', 'DATA_STATE_INDICATOR', 'DATA_MODE', 'PLATFORM_TYPE',
-        'FLOAT_SERIAL_NO', 'FIRMWARE_VERSION', 'WMO_INST_TYPE', 'JULD_QC',
-        'POSITION_QC', 'POSITIONING_SYSTEM', 'PROFILE_PRES_QC',
-        'PROFILE_TEMP_QC', 'PROFILE_PSAL_QC', 'VERTICAL_SAMPLING_SCHEME',
-        'PRES_QC', 'PRES_ADJUSTED_QC', 'TEMP_QC', 'TEMP_ADJUSTED_QC',
-        'PSAL_QC', 'PSAL_ADJUSTED_QC', 'PARAMETER', 'SCIENTIFIC_CALIB_EQUATION',
-        'SCIENTIFIC_CALIB_COEFFICIENT', 'SCIENTIFIC_CALIB_COMMENT',
-        'SCIENTIFIC_CALIB_DATE', 'HISTORY_INSTITUTION', 'HISTORY_STEP',
-        'HISTORY_SOFTWARE', 'HISTORY_SOFTWARE_RELEASE', 'HISTORY_REFERENCE',
-        'HISTORY_DATE', 'HISTORY_ACTION', 'HISTORY_PARAMETER', 'HISTORY_QCTEST',
-        'HISTORY_START_PRES', 'HISTORY_STOP_PRES', 'HISTORY_PREVIOUS_VALUE',
-        'HISTORY_DATE', 'HISTORY_ACTION', 'HISTORY_PARAMETER','HISTORY_QCTEST',
-        'HISTORY_INSTITUTION','N_HISTORY','CONFIG_MISSION_NUMBER','PRES_ADJUSTED_ERROR',
-        'TEMP_ADJUSTED_ERROR','PSAL_ADJUSTED_ERROR','CYCLE_NUMBER'
-    ]
-
     start_dt = np.datetime64(start_date)
     end_dt = np.datetime64(end_date)
 
@@ -380,7 +528,7 @@ def clean_argo_data(file_paths: List[str],
                 file_path,
                 engine="netcdf4",
                 decode_cf=False,
-                drop_variables=DROP_VARS
+                drop_variables=_DROP_VARS
             ) as ds_raw:
                 ds = xr.decode_cf(ds_raw, decode_coords=False)
                 ds.load()
@@ -400,7 +548,7 @@ def clean_argo_data(file_paths: List[str],
             else:
                 _logger.warning(f"Skipping empty time-filtered dataset: {file_path}")
 
-        except Exception as exception:
+        except Exception as exception:  # pylint: disable=broad-except
             _logger.warning(
                 "Failed to clean %s: %s - %s",
                 file_path,
@@ -416,6 +564,7 @@ def get_argo(start_date: str,
              lat_max: Optional[float] = None,
              lon_min: Optional[float] = None,
              lon_max: Optional[float] = None,
+             shape=None,
              clean_raw: bool = False) -> Optional[str]:
     """
     Download, clean, and optionally crop Argo data for a given region
@@ -424,6 +573,10 @@ def get_argo(start_date: str,
     This is the main entry-point function. It will download all raw data
     and create a 'processed' directory containing cleaned, time-filtered,
     and (optionally) spatially-cropped individual .nc files.
+
+    Spatial cropping can be specified either as a bounding box
+    (``lat_min``/``lat_max``/``lon_min``/``lon_max``) or as a polygon /
+    shapefile (``shape``). If both are provided a ``ValueError`` is raised.
 
     Parameters
     ----------
@@ -437,7 +590,14 @@ def get_argo(start_date: str,
         Base directory to save files. A 'raw' and 'processed' folder
         will be created inside a sub-directory named after the region.
     lat_min, lat_max, lon_min, lon_max : Optional[float]
-        Optional cropping bounds
+        Optional bounding-box cropping bounds. Mutually exclusive with
+        ``shape``.
+    shape : str, dict, or shapely geometry, optional
+        Alternative polygon/shapefile for spatial cropping. Accepts a
+        shapefile path (``.shp``), a GeoJSON-like dict, or any shapely
+        ``Polygon`` / ``MultiPolygon``. Mutually exclusive with the bounding
+        box arguments. Requires ``shapely`` (and ``geopandas`` for shapefile
+        paths). Install with ``pip install "ocstrack[geo]"``.
     clean_raw : bool
         Delete raw files after processing is complete
 
@@ -446,15 +606,27 @@ def get_argo(start_date: str,
     Optional[str]
         The path to the 'processed' directory containing the final
         .nc files, or None if the process failed.
+
+    Raises
+    ------
+    ValueError
+        If both bounding-box arguments and ``shape`` are provided.
     """
+
+    box_crop = None not in (lat_min, lat_max, lon_min, lon_max)
+    shape_crop = shape is not None
+
+    if box_crop and shape_crop:
+        raise ValueError(
+            "Provide either a bounding box (lat_min/lat_max/lon_min/lon_max) "
+            "or a shape, not both."
+        )
 
     output_dir = os.path.join(output_dir, region)
     raw_dir = os.path.join(output_dir, "raw")
     processed_dir = os.path.join(output_dir, "processed")
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(processed_dir, exist_ok=True)
-
-    cropping_enabled = None not in (lat_min, lat_max, lon_min, lon_max)
 
     months_to_download = generate_monthly_dates(start_date, end_date)
 
@@ -475,8 +647,8 @@ def get_argo(start_date: str,
         _logger.warning(f"No raw files found for {region}. Exiting.")
         return None
 
-    if cropping_enabled:
-        _logger.info("Cropping enabled. Time-filtering and cropping files...")
+    if box_crop:
+        _logger.info("Bounding-box cropping enabled. Time-filtering and cropping files...")
         crop_argo_data(all_raw_files,
                        processed_dir,
                        lat_min,
@@ -486,6 +658,14 @@ def get_argo(start_date: str,
                        start_date,
                        end_date
                        )
+    elif shape_crop:
+        _logger.info("Shape-based cropping enabled. Time-filtering and cropping files...")
+        crop_argo_data_by_shape(all_raw_files,
+                                processed_dir,
+                                shape,
+                                start_date,
+                                end_date
+                                )
     else:
         _logger.info("Cropping disabled. Time-filtering all raw files...")
         clean_argo_data(all_raw_files,

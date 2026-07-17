@@ -128,4 +128,3 @@ CCI_KEEP_VARS = [
     'bathymetry',
     'distance_to_coast',
 ]
-

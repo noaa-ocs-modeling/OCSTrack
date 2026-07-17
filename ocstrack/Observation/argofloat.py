@@ -135,7 +135,8 @@ class ArgoData:
         # Find and remove duplicate times
         _, unique_idx = np.unique(self.ds['JULD'], return_index=True)
         if len(unique_idx) < self.ds.sizes['N_PROF']:
-            _logger.warning(f"Found and removed {self.ds.sizes['N_PROF'] - len(unique_idx)} duplicate time profiles.")
+            n_dupes = self.ds.sizes['N_PROF'] - len(unique_idx)
+            _logger.warning("Found and removed %d duplicate time profiles.", n_dupes)
             self.ds = self.ds.isel(N_PROF=unique_idx)
 
 

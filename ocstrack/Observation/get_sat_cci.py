@@ -114,7 +114,7 @@ def _subset_vars(ds: xr.Dataset, keep_vars: List[str]) -> xr.Dataset:
     """Drop variables not in *keep_vars*, keeping all that are present."""
     present = [v for v in keep_vars if v in ds]
     # Always keep coordinates
-    coords = [c for c in ds.coords]
+    coords = list(ds.coords)
     to_keep = list(set(present + coords))
     drop = [v for v in ds.data_vars if v not in to_keep]
     return ds.drop_vars(drop) if drop else ds

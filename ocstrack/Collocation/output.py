@@ -1,8 +1,9 @@
 """ Functions for writing collocated outputs file """
 
+import logging
+
 import xarray as xr
 import numpy as np
-import logging
 
 _logger = logging.getLogger(__name__)
 

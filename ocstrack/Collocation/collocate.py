@@ -162,21 +162,21 @@ class Collocate:
                             )
                             found_valid_dt = True
                             break # Stop looping, we found it!
-                        else:
-                            _logger.debug(
-                                "File %s has insufficient time steps (%d). Checking next...",
-                                example_file,
-                                len(times),
-                            )
-    
+                        _logger.debug(
+                            "File %s has insufficient time steps (%d). Checking next...",
+                            example_file,
+                            len(times),
+                        )
+
                     except (OSError, KeyError, ValueError) as e:
                         _logger.warning(f"Error reading {example_file} for time buffer: {e}")
                         continue
 
                 if not found_valid_dt:
-                     raise ValueError(
-                         "Cannot infer time_buffer: Scanned all files but none contained >= 2 time steps."
-                     )
+                    raise ValueError(
+                        "Cannot infer time_buffer: Scanned all files but "
+                        "none contained >= 2 time steps."
+                    )
 
         else:
             self.time_buffer = time_buffer
@@ -213,7 +213,7 @@ class Collocate:
             _logger.info("Starting 2D/Surface collocation...")
             return self._run_surface_collocation(output_path)
 
-        elif self.collocation_type == '3D_Profile':
+        if self.collocation_type == '3D_Profile':
             if not isinstance(self.obs, ArgoData):
                 raise TypeError("3D_Profile collocation requires ArgoData observation type.")
             if self.search_radius is not None:
@@ -224,8 +224,7 @@ class Collocate:
             _logger.info("Starting 3D Profile collocation...")
             return self._run_profile_collocation(output_path)
 
-        else:
-            raise NotImplementedError(f"Collocation type {self.collocation_type} not supported.")
+        raise NotImplementedError(f"Collocation type {self.collocation_type} not supported.")
 
     def _run_surface_collocation(self, output_path: Optional[str] = None) -> xr.Dataset:
         """
@@ -294,8 +293,8 @@ class Collocate:
             else:
                 if self.temporal_interp:
                     _logger.warning(
-                        "Cannot perform temporal interpolation for %s as it has less than 2 timesteps. "
-                        "Falling back to nearest neighbor.",
+                        "Cannot perform temporal interpolation for %s as it has "
+                        "less than 2 timesteps. Falling back to nearest neighbor.",
                         path,
                     )
                 obs_sub, idx, tdel = temporal_nearest(self.obs.ds,
@@ -720,7 +719,7 @@ class Collocate:
         flat_ib, flat_ia, flat_wt = [], [], []
         obs_lens = []
 
-        for i, (nodes, dists) in enumerate(zip(all_nodes, all_dists)):
+        for i, nodes in enumerate(all_nodes):
             obs_lens.append(len(nodes))
             if len(nodes) == 0:
                 continue
@@ -901,9 +900,9 @@ class Collocate:
             if isinstance(times_or_inds, tuple):
                 ib, ia, wts = times_or_inds
                 # This handles nodes being shape (n_obs, k_nearest)
-                for i in range(len(ib)):
+                for i, ib_i in enumerate(ib):
                     nd = nodes[i]
-                    v0 = model_data[ib[i], nd]
+                    v0 = model_data[ib_i, nd]
                     v1 = model_data[ia[i], nd]
                     values.append(v0 * (1 - wts[i]) + v1 * wts[i])
                     dpts.append(depths[nd])

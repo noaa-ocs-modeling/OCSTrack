@@ -53,7 +53,7 @@ def test_download_sat_data_success(mock_makedirs, mock_exists, mock_requests_get
 
         # Assertions
         mock_makedirs.assert_called_once_with('/fake/dir', exist_ok=True)
-        mock_requests_get.assert_called_once_with('http://fake.url/20230101.nc', stream=True)
+        mock_requests_get.assert_called_once_with('http://fake.url/20230101.nc', stream=True, timeout=60)
         m_open.assert_called_once_with('/fake/dir/20230101.nc', 'wb')
         handle = m_open()
         handle.write.assert_any_call(b'fake')

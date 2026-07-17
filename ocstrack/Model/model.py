@@ -47,10 +47,10 @@ def _parse_gr3_mesh(filepath: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     Assumes the hgrid.gr3 file contains node-based data with the expected format.
     This was added so we don't need OCSMesh as a requirement anymore.
     """
-    with open(filepath, 'r') as f:
+    with open(filepath, 'r', encoding='utf-8') as f:
         _ = f.readline()  # mesh name
         ne_np_line = f.readline()
-        n_elements, n_nodes = map(int, ne_np_line.strip().split())
+        _n_elements, n_nodes = map(int, ne_np_line.strip().split())
 
         lons = np.empty(n_nodes)
         lats = np.empty(n_nodes)
@@ -341,11 +341,11 @@ class SCHISM:
                     if 'time' in ds:
                         t = ds['time'].values
                         # If simple float/int, try to decode. If already datetime, use as is.
-                        # (SCHISM usually needs decoding if the file wasn't saved with CF conventions)
+                        # (SCHISM usually needs decoding if not CF-encoded)
                         if not np.issubdtype(t.dtype, np.datetime64):
-                             t = xr.decode_cf(ds[['time']])['time'].values
+                            t = xr.decode_cf(ds[['time']])['time'].values
                         all_times.append(t)
-            except Exception as e:
+            except (OSError, KeyError, ValueError) as e:
                 print(f"Warning: Could not read time from {fpath}: {e}")
 
         if all_times:
@@ -811,9 +811,9 @@ class WW3:
                     if 'time' in ds:
                         t = ds['time'].values
                         if not np.issubdtype(t.dtype, np.datetime64):
-                             t = xr.decode_cf(ds[['time']])['time'].values
+                            t = xr.decode_cf(ds[['time']])['time'].values
                         all_times.append(t)
-            except Exception as e:
+            except (OSError, KeyError, ValueError) as e:
                 print(f"Warning: Could not read time from {fpath}: {e}")
 
         if all_times:
@@ -825,6 +825,9 @@ class WW3:
         return self._time
 
 def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
+    # pylint: disable=invalid-name,too-many-arguments,too-many-positional-arguments
+    # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    # pylint: disable=unused-argument,unused-variable
     """
      STRETCHING:  Compute ROMS vertical coordinate stretching function
 
@@ -870,10 +873,10 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
     #-----------------------------------------------------------------
 
     # Original vertical stretching function (Song and Haidvogel, 1994).
-    if (Vstretching == 1):
+    if Vstretching == 1:
         ds = 1.0/N
 
-        if (kgrid == 1):
+        if kgrid == 1:
             Nlev = Np
             lev  = np.linspace(0.0,N,Np)
             s    = (lev-N)*ds
@@ -882,7 +885,7 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
             lev  = np.linspace(1.0,N,Np)-0.5
             s    = (lev-N)*ds
 
-        if (theta_s > 0):
+        if theta_s > 0:
             Ptheta = np.sinh(theta_s*s)/np.sinh(theta_s)
             Rtheta = np.tanh(theta_s*(s+0.5))/(2.0*np.tanh(0.5*theta_s))-0.5
             C      = (1.0-theta_b)*Ptheta+theta_b*Rtheta
@@ -890,12 +893,12 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
             C=s
 
     # A. Shchepetkin (UCLA-ROMS, 2005) vertical stretching function.
-    if (Vstretching==2):
+    if Vstretching==2:
         alfa = 1.0
         beta = 1.0
         ds   = 1.0/N
 
-        if (kgrid == 1):
+        if kgrid == 1:
             Nlev = Np
             lev  = np.linspace(0.0,N,Np)
             s    = (lev-N)*ds
@@ -904,9 +907,9 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
             lev  = np.linspace(1.0,N,Np)-0.5
             s    = (lev-N)*ds
 
-        if (theta_s > 0):
+        if theta_s > 0:
             Csur = (1.0-np.cosh(theta_s*s))/(np.cosh(theta_s)-1.0)
-            if (theta_b > 0):
+            if theta_b > 0:
                 Cbot   = -1.0+np.sinh(theta_b*(s+1.0))/np.sinh(theta_b)
                 weigth = (s + 1.0) ** alfa * (
                     1.0 + (alfa / beta) * (1.0 - (s + 1.0) ** beta)
@@ -918,10 +921,10 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
             C=s
 
     # R. Geyer BBL vertical stretching function.
-    if (Vstretching==3):
+    if Vstretching==3:
         ds   = 1.0/N
 
-        if (kgrid == 1):
+        if kgrid == 1:
             Nlev = Np
             lev  = np.linspace(0.0,N,Np)
             s    = (lev-N)*ds
@@ -930,7 +933,7 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
             lev  = np.linspace(1.0,N,Np)-0.5
             s    = (lev-N)*ds
 
-        if (theta_s > 0):
+        if theta_s > 0:
             exp_s = theta_s   # surface stretching exponent
             exp_b = theta_b   # bottom  stretching exponent
             alpha = 3      # scale factor for all hyperbolic functions
@@ -943,10 +946,10 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
 
     # A. Shchepetkin (UCLA-ROMS, 2010) double vertical stretching function
     # with bottom refinement
-    if (Vstretching == 4):
+    if Vstretching == 4:
         ds   = 1.0/N
 
-        if (kgrid == 1):
+        if kgrid == 1:
             Nlev = Np
             lev  = np.linspace(0.0,N,Np)
             s    = (lev-N)*ds
@@ -955,12 +958,12 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
             lev  = np.linspace(1.0,N,Np)-0.5
             s    = (lev-N)*ds
 
-        if (theta_s > 0):
+        if theta_s > 0:
             Csur = (1.0-np.cosh(theta_s*s))/(np.cosh(theta_s)-1.0)
         else:
             Csur = -s**2
 
-        if (theta_b > 0):
+        if theta_b > 0:
             Cbot = (np.exp(theta_b*Csur)-1.0)/(1.0-np.exp(-theta_b))
             C    = Cbot
         else:
@@ -970,6 +973,8 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
 
 
 def set_depth( Vtransform, Vstretching, theta_s, theta_b, hc, N, igrid, h, zeta ):
+    # pylint: disable=invalid-name,too-many-arguments,too-many-positional-arguments
+    # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """
      Given a batymetry (h), free-surface (zeta) and terrain-following
      parameters, this function computes the 3D depths for the requested
@@ -1039,29 +1044,26 @@ def set_depth( Vtransform, Vstretching, theta_s, theta_b, hc, N, igrid, h, zeta 
     else:
         z   = np.empty((Lp,Mp,N))
 
-    hmin    = np.min(h)
-    hmax    = np.max(h)
-
-    if (igrid == 5):
+    if igrid == 5:
         kgrid=1
     else:
         kgrid=0
 
-    s,C = stretching(Vstretching, theta_s, theta_b, hc, N, kgrid);
+    s,C = stretching(Vstretching, theta_s, theta_b, hc, N, kgrid)
     #-----------------------------------------------------------------------
     #  Average bathymetry and free-surface at requested C-grid type.
     #-----------------------------------------------------------------------
 
-    if (igrid==1):
+    if igrid==1:
         hr    = h
         zetar = zeta
-    elif (igrid==2):
+    elif igrid==2:
         hp    = 0.25*(h[0:L,0:M]+h[1:Lp,0:M]+h[0:L,1:Mp]+h[1:Lp,1:Mp])
         zetap = 0.25*(zeta[0:L,0:M]+zeta[1:Lp,0:M]+zeta[0:L,1:Mp]+zeta[1:Lp,1:Mp])
-    elif (igrid==3):
+    elif igrid==3:
         hu    = 0.5*(h[0:L,0:Mp]+h[1:Lp,0:Mp])
         zetau = 0.5*(zeta[0:L,0:Mp]+zeta[1:Lp,0:Mp])
-    elif (igrid==4):
+    elif igrid==4:
         hv    = 0.5*(h[0:Lp,0:M]+h[0:Lp,1:Mp])
         zetav = 0.5*(zeta[0:Lp,0:M]+zeta[0:Lp,1:Mp])
     elif igrid==5:
@@ -1071,20 +1073,20 @@ def set_depth( Vtransform, Vstretching, theta_s, theta_b, hc, N, igrid, h, zeta 
     #----------------------------------------------------------------------
     # Compute depths (m) at requested C-grid location.
     #----------------------------------------------------------------------
-    if (Vtransform == 1):
-        if (igrid==1):
+    if Vtransform == 1:
+        if igrid==1:
             for k in range (0,N):
                 z0 = (s[k]-C[k])*hc + C[k]*hr
                 z[:,:,k] = z0 + zetar*(1.0 + z0/hr)
-        elif (igrid==2):
+        elif igrid==2:
             for k in range (0,N):
                 z0 = (s[k]-C[k])*hc + C[k]*hp
                 z[:,:,k] = z0 + zetap*(1.0 + z0/hp)
-        elif (igrid==3):
+        elif igrid==3:
             for k in range (0,N):
                 z0 = (s[k]-C[k])*hc + C[k]*hu
                 z[:,:,k] = z0 + zetau*(1.0 + z0/hu)
-        elif (igrid==4):
+        elif igrid==4:
             for k in range (0,N):
                 z0 = (s[k]-C[k])*hc + C[k]*hv
                 z[:,:,k] = z0 + zetav*(1.0 + z0/hv)
@@ -1094,19 +1096,19 @@ def set_depth( Vtransform, Vstretching, theta_s, theta_b, hc, N, igrid, h, zeta 
                 z0 = (s[k]-C[k])*hc + C[k]*hr
                 z[:,:,k] = z0 + zetar*(1.0 + z0/hr)
     elif Vtransform==2:
-        if (igrid==1):
+        if igrid==1:
             for k in range (0,N):
                 z0 = (hc*s[k]+C[k]*hr)/(hc+hr)
                 z[:,:,k] = zetar+(zeta+hr)*z0
-        elif (igrid==2):
+        elif igrid==2:
             for k in range (0,N):
                 z0 = (hc*s[k]+C[k]*hp)/(hc+hp)
                 z[:,:,k] = zetap+(zetap+hp)*z0
-        elif (igrid==3):
+        elif igrid==3:
             for k in range (0,N):
                 z0 = (hc*s[k]+C[k]*hu)/(hc+hu)
                 z[:,:,k] = zetau+(zetau+hu)*z0
-        elif (igrid==4):
+        elif igrid==4:
             for k in range (0,N):
                 z0 = (hc*s[k]+C[k]*hv)/(hc+hv)
                 z[:,:,k] = zetav+(zetav+hv)*z0
@@ -1121,7 +1123,8 @@ class ROMS:
     """
     ROMS model interface.
     """
-    def __init__(self, rundir: str, model_dict: dict, start_date: np.datetime64, end_date: np.datetime64):
+    def __init__(self, rundir: str, model_dict: dict,
+                 start_date: np.datetime64, end_date: np.datetime64):
         self.rundir = rundir
         self.model_dict = model_dict
         self.start_date = np.datetime64(start_date)
@@ -1148,7 +1151,7 @@ class ROMS:
         if not os.path.exists(ocean_in_path):
             raise FileNotFoundError("ocean.in not found in the run directory.")
 
-        with open(ocean_in_path, "r") as f:
+        with open(ocean_in_path, "r", encoding='utf-8') as f:
             for line in f:
                 sline = line.strip()
                 if not sline or sline.startswith("!"):
@@ -1207,7 +1210,8 @@ class ROMS:
             _logger.warning(f"Output directory {self.output_dir} does not exist.")
             return []
 
-        all_files = [f for f in os.listdir(self.output_dir) if f.startswith("roms_his_") and f.endswith(".nc")]
+        all_files = [f for f in os.listdir(self.output_dir)
+                     if f.startswith("roms_his_") and f.endswith(".nc")]
         all_files.sort(key=natural_sort_key)
 
         selected = []
@@ -1222,7 +1226,7 @@ class ROMS:
 
                     if times[-1] >= self.start_date and times[0] <= self.end_date:
                         selected.append(fpath)
-            except Exception as exception:
+            except (OSError, KeyError, ValueError) as exception:
                 _logger.warning("Error reading %s: %s", fpath, exception)
                 continue
         return selected
@@ -1306,18 +1310,22 @@ class ROMS:
 
     @property
     def mesh_x(self):
+        """Return mesh longitudes."""
         return self._mesh_x
 
     @property
     def mesh_y(self):
+        """Return mesh latitudes."""
         return self._mesh_y
 
     @property
     def files(self):
+        """Return the list of selected model output files."""
         return self._files
 
     @property
     def time(self):
+        """Return the concatenated time array for all selected files."""
         if self._time is not None:
             return self._time
         if not self.files:
@@ -1330,9 +1338,9 @@ class ROMS:
                     if 'ocean_time' in ds:
                         t = ds['ocean_time'].values
                         if not np.issubdtype(t.dtype, np.datetime64):
-                             t = xr.decode_cf(ds[['ocean_time']])['ocean_time'].values
+                            t = xr.decode_cf(ds[['ocean_time']])['ocean_time'].values
                         all_times.append(t)
-            except Exception as exception:
+            except (OSError, KeyError, ValueError) as exception:
                 print(f"Warning: Could not read time from {fpath}: {exception}")
 
         if all_times:

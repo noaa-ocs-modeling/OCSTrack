@@ -61,7 +61,7 @@ def inverse_distance_weights(distances: np.ndarray,
     If a distance is exactly 0, its weight becomes 1 and all others 0.
     """
     # Check for zero distances
-    is_zero = (distances == 0)
+    is_zero = distances == 0
     if np.any(is_zero):
         # If a point is at the exact same location, its weight is 1, others are 0
         # Create a zero-filled array and place 1s where distance was 0

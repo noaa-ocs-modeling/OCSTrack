@@ -73,7 +73,7 @@ def download_sat_data(dates_str: List[str],
         if not os.path.exists(raw_path):
             for attempt in range(retries):
                 try:
-                    with requests.get(url, stream=True) as r:
+                    with requests.get(url, stream=True, timeout=60) as r:
                         r.raise_for_status()
                         with open(raw_path, 'wb') as f:
                             for chunk in r.iter_content(chunk_size=8192):
@@ -190,7 +190,7 @@ def crop_by_shape(dataset: xr.Dataset,
     >>> cropped = crop_by_shape(ds, geojson)
     """
     try:
-        from shapely.geometry import shape as shapely_shape, Point, MultiPolygon
+        from shapely.geometry import shape as shapely_shape, Point
         from shapely.ops import unary_union
     except ImportError as exc:
         raise ImportError(
@@ -414,7 +414,8 @@ def get_per_sat_coastwatch(start_date: str,
 
     final_dataset = None
     if concat and datasets_to_concat:
-        concat_filename = f"concat_{'cropped_' if cropping_enabled else ''}{sat}_{start_date}_{end_date}.nc"
+        crop_tag = 'cropped_' if cropping_enabled else ''
+        concat_filename = f"concat_{crop_tag}{sat}_{start_date}_{end_date}.nc"
         concat_path = os.path.join(output_dir, concat_filename)
         final_dataset = concat_sat_data(datasets_to_concat, concat_path, sat)
 
@@ -475,7 +476,8 @@ def get_multi_sat_coastwatch(start_date: str,
 
     if all_sat:
         try:
-            multisat_filename = f"multisat_{'cropped_' if  lat_min is not None else ''}{start_date}_{end_date}.nc"
+            crop_tag = 'cropped_' if lat_min is not None else ''
+            multisat_filename = f"multisat_{crop_tag}{start_date}_{end_date}.nc"
             multisat_path = os.path.join(output_dir, multisat_filename)
             all_sat_ds = xr.concat(all_sat, dim='time')
             all_sat_ds.to_netcdf(multisat_path)
