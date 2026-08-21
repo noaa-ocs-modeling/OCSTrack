@@ -270,6 +270,17 @@ class SCHISM:
             # Merge
             ds_merged = xr.merge([ds_main, ds_zcor])
 
+            # Normalise SCHISM New I/O dimension names so that the collocation
+            # engine can always find the spatial dimension as 'node'.
+            # SCHISM outputs use 'nSCHISM_hgrid_node'; the Collocate class
+            # calls .isel(node=...), so we rename here once.
+            rename_map = {}
+            for dim in list(ds_merged.dims):
+                if dim == 'nSCHISM_hgrid_node':
+                    rename_map[dim] = 'node'
+            if rename_map:
+                ds_merged = ds_merged.rename(rename_map)
+
             # Slice by time *before* loading, just in case
             time_slice = slice(self.start_date, self.end_date)
             ds_sliced = ds_merged.sel(time=time_slice)
