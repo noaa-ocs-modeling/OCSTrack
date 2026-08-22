@@ -281,23 +281,12 @@ class SCHISM:
             if rename_map:
                 ds_merged = ds_merged.rename(rename_map)
 
-            # Ensure the dimension order is (time, <vgrid layers>, node) so the
-            # collocation engine's `isel(time=..., node=...)` yields an array
-            # shaped (layers, n_nearest) and its subsequent `[:, k]` slice picks
-            # one node's full vertical column. SCHISM New I/O may store the 3-D
-            # arrays as (time, node, layers); without this transpose the layer
-            # and node axes get swapped, mixing nearest nodes with vertical
-            # levels and producing all-NaN model profiles after interpolation.
-            layer_dim = next(
-                (d for d in ds_merged.dims
-                 if 'vgrid' in str(d).lower() or 'layer' in str(d).lower()),
-                None,
-            )
-            if layer_dim is not None and 'node' in ds_merged.dims:
-                other_dims = [d for d in ds_merged.dims
-                              if d not in (layer_dim, 'node')]
-                target_order = (*other_dims, layer_dim, 'node')
-                ds_merged = ds_merged.transpose(*target_order)
+            # NOTE: do NOT transpose the merged dataset here. SCHISM New I/O
+            # stores the 3-D arrays as (time, node, vgrid_layers) which can be
+            # 13 GB per stack; transposing a lazy array forces a full,
+            # non-contiguous re-read + copy on .load(), causing OOM. The
+            # collocation engine instead reorders the *small* per-profile
+            # slices (node x layers) internally, so any storage order is fine.
 
             # Slice by time *before* loading, just in case
             time_slice = slice(self.start_date, self.end_date)
