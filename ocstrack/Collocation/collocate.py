@@ -554,6 +554,33 @@ class Collocate:
         model_all_var = model_data[model_var_name]
         model_all_zcor = model_data[model_zcor_name]
 
+        # Identify the vertical-layer and node dimension names so that the
+        # per-profile slices below can be reordered to a canonical
+        # (layers, node) shape regardless of how the model stored them
+        # (SCHISM New I/O uses (time, node, vgrid_layers); ROMS uses
+        # (time, s_rho, node)).  Reordering is done on the SMALL selected
+        # slices (n_layers x k_nearest), never on the full lazy array, so it
+        # adds no meaningful memory or I/O cost.
+        def _dim_of(da, *keys):
+            for d in da.dims:
+                ds = str(d).lower()
+                if any(k in ds for k in keys):
+                    return d
+            return None
+
+        _zcor_layer_dim = _dim_of(model_all_zcor, "vgrid", "layer", "s_rho")
+        _zcor_node_dim  = _dim_of(model_all_zcor, "node")
+        _var_layer_dim  = _dim_of(model_all_var,  "vgrid", "layer", "s_rho")
+        _var_node_dim   = _dim_of(model_all_var,  "node")
+
+        def _to_layers_node(da_sel, layer_dim, node_dim):
+            """Return a (layers, k_nearest) numpy array from a selected slice
+            whose dims are some order of (layer_dim, node_dim)."""
+            if layer_dim is not None and node_dim is not None \
+                    and layer_dim in da_sel.dims and node_dim in da_sel.dims:
+                da_sel = da_sel.transpose(layer_dim, node_dim)
+            return da_sel.values
+
         for i in tqdm(range(n_profiles), desc="Vertical Collocation"):
             # profile *in the subset*.
             argo_pres_i = argo_all_pres[i, :]
@@ -588,20 +615,30 @@ class Collocate:
                 ib, ia, wts = time_args
                 t_idx_b, t_idx_a, t_wt = ib[i], ia[i], wts[i]
 
-                zcor_b = model_all_zcor.isel(time=t_idx_b, node=node_indices).values
-                zcor_a = model_all_zcor.isel(time=t_idx_a, node=node_indices).values
-                var_b = model_all_var.isel(time=t_idx_b, node=node_indices).values
-                var_a = model_all_var.isel(time=t_idx_a, node=node_indices).values
+                zcor_b = _to_layers_node(
+                    model_all_zcor.isel(time=t_idx_b, node=node_indices),
+                    _zcor_layer_dim, _zcor_node_dim)
+                zcor_a = _to_layers_node(
+                    model_all_zcor.isel(time=t_idx_a, node=node_indices),
+                    _zcor_layer_dim, _zcor_node_dim)
+                var_b = _to_layers_node(
+                    model_all_var.isel(time=t_idx_b, node=node_indices),
+                    _var_layer_dim, _var_node_dim)
+                var_a = _to_layers_node(
+                    model_all_var.isel(time=t_idx_a, node=node_indices),
+                    _var_layer_dim, _var_node_dim)
 
                 model_zcor_at_nodes = zcor_b * (1 - t_wt) + zcor_a * t_wt
                 model_var_at_nodes = var_b * (1 - t_wt) + var_a * t_wt
 
             else: # Temporal nearest
                 t_idx = time_args[i]
-                model_zcor_at_nodes = model_all_zcor.isel(time=t_idx,
-                                                          node=node_indices).values
-                model_var_at_nodes = model_all_var.isel(time=t_idx,
-                                                        node=node_indices).values
+                model_zcor_at_nodes = _to_layers_node(
+                    model_all_zcor.isel(time=t_idx, node=node_indices),
+                    _zcor_layer_dim, _zcor_node_dim)
+                model_var_at_nodes = _to_layers_node(
+                    model_all_var.isel(time=t_idx, node=node_indices),
+                    _var_layer_dim, _var_node_dim)
 
             # 3. Vertical-then-Horizontal Interpolation
             model_profiles_at_argo_depths = np.full((self.n_nearest, n_valid_levels), np.nan)
