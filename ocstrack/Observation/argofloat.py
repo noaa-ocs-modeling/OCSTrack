@@ -181,20 +181,38 @@ class ArgoData:
             raise ValueError("New latitude array must match existing size (JULD).")
         self.ds['LATITUDE'] = (self.ds.JULD.name, np.array(new_lat))
 
+    @staticmethod
+    def _adj_or_raw(ds, adj_key, raw_key):
+        """Return adjusted values where finite, raw values otherwise.
+
+        Real-time-mode Argo floats have ``_ADJUSTED`` variables present
+        but entirely NaN until delayed-mode QC is applied.  A plain
+        ``ds.get(adj_key, ds[raw_key])`` returns the all-NaN adjusted
+        array whenever the key exists, silently discarding good raw data.
+        This method recovers those profiles with a per-element fallback.
+        """
+        raw = ds[raw_key].values if raw_key in ds else None
+        adj = ds[adj_key].values if adj_key in ds else None
+        if adj is None:
+            return raw
+        if raw is None:
+            return adj
+        return np.where(~np.isnan(adj), adj, raw)
+
     @property
     def pres(self):
-        """Return pressure (dbar) as a numpy array."""
-        return self.ds.get('PRES_ADJUSTED', self.ds['PRES']).values
+        """Return pressure (dbar), preferring adjusted values where available."""
+        return self._adj_or_raw(self.ds, 'PRES_ADJUSTED', 'PRES')
 
     @property
     def temp(self):
-        """Return temperature (°C) as a numpy array."""
-        return self.ds.get('TEMP_ADJUSTED', self.ds['TEMP']).values
+        """Return temperature (°C), preferring adjusted values where available."""
+        return self._adj_or_raw(self.ds, 'TEMP_ADJUSTED', 'TEMP')
 
     @property
     def psal(self):
-        """Return salinity (PSU) as a numpy array."""
-        return self.ds.get('PSAL_ADJUSTED', self.ds['PSAL']).values
+        """Return salinity (PSU), preferring adjusted values where available."""
+        return self._adj_or_raw(self.ds, 'PSAL_ADJUSTED', 'PSAL')
 
     @property
     def depth(self):
