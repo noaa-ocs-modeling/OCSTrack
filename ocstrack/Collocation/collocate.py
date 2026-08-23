@@ -543,11 +543,25 @@ class Collocate:
         out_obs_var = np.full((n_profiles, max_levels), np.nan)
         out_model_var = np.full((n_profiles, max_levels), np.nan)
 
-        # Get data from the argo_sub (the subset)
+        # Get data from the argo_sub (the subset).
+        # Use adjusted values where finite, fall back to raw per element.
+        # xr.Dataset.get() returns the adjusted variable whenever the key
+        # exists as a variable, even if it is entirely NaN (real-time-mode
+        # Argo floats have _ADJUSTED = all-NaN before delayed-mode QC).
+        # The per-element fallback recovers those profiles.
+        def _adj_or_raw(ds, adj_key, raw_key):
+            raw = ds[raw_key].values if raw_key in ds else None
+            adj = ds[adj_key].values if adj_key in ds else None
+            if adj is None:
+                return raw
+            if raw is None:
+                return adj
+            return np.where(~np.isnan(adj), adj, raw)
+
         argo_var_name_adj = f"{obs_var_name.upper()}_ADJUSTED"
         argo_var_name_raw = f"{obs_var_name.upper()}"
-        argo_all_pres = argo_sub.get('PRES_ADJUSTED', argo_sub['PRES']).values
-        argo_all_var = argo_sub.get(argo_var_name_adj, argo_sub[argo_var_name_raw]).values
+        argo_all_pres = _adj_or_raw(argo_sub, 'PRES_ADJUSTED', 'PRES')
+        argo_all_var  = _adj_or_raw(argo_sub, argo_var_name_adj, argo_var_name_raw)
         argo_all_lats = argo_sub['LATITUDE'].values
 
         # Use the passed model_data
