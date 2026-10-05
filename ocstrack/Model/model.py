@@ -3,7 +3,7 @@
 import logging
 import os
 import re
-from typing import List, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import xarray as xr
@@ -280,13 +280,6 @@ class SCHISM:
                     rename_map[dim] = 'node'
             if rename_map:
                 ds_merged = ds_merged.rename(rename_map)
-
-            # NOTE: do NOT transpose the merged dataset here. SCHISM New I/O
-            # stores the 3-D arrays as (time, node, vgrid_layers) which can be
-            # 13 GB per stack; transposing a lazy array forces a full,
-            # non-contiguous re-read + copy on .load(), causing OOM. The
-            # collocation engine instead reorders the *small* per-profile
-            # slices (node x layers) internally, so any storage order is fine.
 
             # Slice by time *before* loading, just in case
             time_slice = slice(self.start_date, self.end_date)
@@ -1364,6 +1357,440 @@ class ROMS:
         if all_times:
             self._time = np.concatenate(all_times)
             self._time.sort()
+        else:
+            self._time = np.array([])
+
+        return self._time
+
+
+class UFS_SCHISM:
+    """
+    UFS-SCHISM (old I/O) model interface.
+
+    Handles selection and loading of model outputs from a UFS-SCHISM run
+    that uses the legacy combined output format (``schout_N.nc``).  In this
+    format **every variable** — including 2-D surface fields, 3-D profiles,
+    and the z-coordinate (``zcor``) — lives in a single file, so no file
+    pairing is required.
+
+    Key differences from the new-I/O ``SCHISM`` class
+    --------------------------------------------------
+    * Files are named ``schout_1.nc``, ``schout_2.nc``, …
+    * Mesh coordinates (lon, lat, depth) are embedded in the output files;
+      no external ``hgrid.gr3`` is read.
+    * Array dimension order for 3-D variables is
+      ``(time, nSCHISM_hgrid_node, nSCHISM_vgrid_layers)`` — node axis
+      comes *before* the vertical axis.
+    * ``zcor`` lives in the same file as all other variables.
+    * Dry/missing values are flagged with ``9.96921e+36``; these are
+      replaced with ``NaN`` on load.
+
+    Expected run-directory layout::
+
+        RunDir/
+        └── outputs/
+            ├── schout_1.nc
+            ├── schout_2.nc
+            └── ...
+
+    Parameters
+    ----------
+    rundir : str
+        Path to the UFS-SCHISM run directory.
+    model_dict : dict
+        Must contain at minimum:
+
+        * ``'var'`` – variable name to load (e.g. ``'elev'``, ``'temp'``,
+          ``'salt'``).
+        * ``'var_type'`` – one of ``'2D'``, ``'3D_Surface'``,
+          ``'3D_Profile'``.
+
+        For ``'3D_Profile'`` the ``'zcor_var'`` key is optional and
+        defaults to ``'zcor'`` (the standard old-I/O name).
+    start_date : np.datetime64
+        Start of the time range for selecting model files.
+    end_date : np.datetime64
+        End of the time range for selecting model files.
+    output_subdir : str, optional
+        Name of the subdirectory containing the output files
+        (default: ``'outputs'``).
+    missing_value : float, optional
+        Fill value used by SCHISM old I/O (default: ``9.96921e+36``).
+        Values larger than ``missing_value * 0.9`` are replaced with
+        ``NaN`` on load to tolerate minor floating-point differences.
+
+    Methods
+    -------
+    load_variable(path)
+        Load the requested 2-D or surface variable from a single
+        ``schout_N.nc`` file.  Returns an ``xr.DataArray`` with the
+        spatial node axis named ``'node'``.
+    load_3d_file_pair(path)
+        For ``'3D_Profile'`` collocation.  Loads the main variable and
+        ``zcor`` from the *same* file and returns a merged
+        ``xr.Dataset`` with fill values masked and the node dimension
+        renamed to ``'node'``.
+    """
+
+    def __init__(
+        self,
+        rundir: str,
+        model_dict: dict,
+        start_date: np.datetime64,
+        end_date: np.datetime64,
+        output_subdir: str = "outputs",
+        missing_value: float = 9.96921e+36,
+    ) -> None:
+        self.rundir = rundir
+        self.model_dict = model_dict
+        self.start_date = np.datetime64(start_date)
+        self.end_date = np.datetime64(end_date)
+        self.output_dir = os.path.join(self.rundir, output_subdir)
+        # Use 90 % of the fill value as the masking threshold so that
+        # minor floating-point differences do not slip through.
+        self._fill_threshold = missing_value * 0.9
+
+        self._time: Optional[np.ndarray] = None
+
+        self._validate_model_dict()
+        self._files = self._select_model_files()
+        self._load_mesh_from_files()
+
+    # ------------------------------------------------------------------
+    # Validation
+    # ------------------------------------------------------------------
+
+    def _validate_model_dict(self) -> None:
+        """
+        Ensure the model_dict contains all required keys.
+
+        Raises
+        ------
+        ValueError
+            If required keys are missing or ``var_type`` is not
+            a recognised value.
+        """
+        required = ['var', 'var_type']
+        missing = [k for k in required if k not in self.model_dict]
+        if missing:
+            raise ValueError(f"Missing keys in model_dict: {missing}")
+
+        valid_types = ['2D', '3D_Surface', '3D_Profile']
+        var_type = self.model_dict['var_type']
+        if var_type not in valid_types:
+            raise ValueError(
+                f"var_type must be one of {valid_types}, got '{var_type}'"
+            )
+
+    # ------------------------------------------------------------------
+    # File selection
+    # ------------------------------------------------------------------
+
+    def _select_model_files(self) -> List[str]:
+        """
+        Discover and return ``schout_N.nc`` files whose time ranges
+        overlap with ``[start_date, end_date]``.
+
+        Returns
+        -------
+        List[str]
+            Naturally sorted list of matching file paths.
+        """
+        if not os.path.isdir(self.output_dir):
+            _logger.warning(
+                "Output directory %s does not exist.", self.output_dir
+            )
+            return []
+
+        all_files = [
+            f for f in os.listdir(self.output_dir)
+            if f.startswith("schout_") and f.endswith(".nc")
+        ]
+        all_files.sort(key=natural_sort_key)
+
+        selected = []
+        for fname in all_files:
+            fpath = os.path.join(self.output_dir, fname)
+            try:
+                with xr.open_dataset(fpath, decode_times=False) as ds:
+                    if 'time' not in ds.variables:
+                        continue
+                    times = xr.decode_cf(ds[['time']])['time'].values
+                    if times[-1] >= self.start_date and times[0] <= self.end_date:
+                        selected.append(fpath)
+            except (OSError, KeyError, ValueError) as exc:
+                _logger.warning("Error reading %s: %s", fpath, exc)
+
+        if not selected:
+            _logger.warning(
+                "No schout_*.nc files found in %s within %s – %s.",
+                self.output_dir, self.start_date, self.end_date,
+            )
+        return selected
+
+    # ------------------------------------------------------------------
+    # Mesh loading
+    # ------------------------------------------------------------------
+
+    def _load_mesh_from_files(self) -> None:
+        """
+        Read node coordinates and depth from the first available output
+        file.  These variables are embedded in every ``schout_N.nc``.
+        """
+        if not self._files:
+            _logger.warning(
+                "No files available; mesh coordinates cannot be loaded."
+            )
+            self._mesh_x = np.array([])
+            self._mesh_y = np.array([])
+            self._mesh_depth = np.array([])
+            return
+
+        try:
+            with xr.open_dataset(self._files[0]) as ds:
+                self._mesh_x = ds['SCHISM_hgrid_node_x'].values
+                self._mesh_y = ds['SCHISM_hgrid_node_y'].values
+                self._mesh_depth = ds['depth'].values
+            _logger.info(
+                "UFS_SCHISM mesh loaded: %d nodes from %s.",
+                len(self._mesh_x), self._files[0],
+            )
+        except (OSError, KeyError) as exc:
+            _logger.error(
+                "Failed to load mesh from %s: %s", self._files[0], exc
+            )
+            self._mesh_x = np.array([])
+            self._mesh_y = np.array([])
+            self._mesh_depth = np.array([])
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _mask_fill(self, da: xr.DataArray) -> xr.DataArray:
+        """Replace SCHISM old-I/O fill values with NaN."""
+        return da.where(da < self._fill_threshold)
+
+    @staticmethod
+    def _rename_node_dim(obj: Union[xr.DataArray, xr.Dataset]
+                         ) -> Union[xr.DataArray, xr.Dataset]:
+        """
+        Rename ``nSCHISM_hgrid_node`` → ``node`` so the collocation
+        engine always finds the spatial axis under the same name.
+        """
+        rename_map = {}
+        if 'nSCHISM_hgrid_node' in obj.dims:
+            rename_map['nSCHISM_hgrid_node'] = 'node'
+        return obj.rename(rename_map) if rename_map else obj
+
+    # ------------------------------------------------------------------
+    # Public loading interface
+    # ------------------------------------------------------------------
+
+    def load_variable(self, path: str) -> xr.DataArray:
+        """
+        Load the requested variable from a single ``schout_N.nc`` file.
+
+        For ``'3D_Surface'`` variables the top (last) vertical layer is
+        extracted automatically.
+
+        Parameters
+        ----------
+        path : str
+            Full path to the ``schout_N.nc`` file.
+
+        Returns
+        -------
+        xr.DataArray
+            The variable, time-sliced to ``[start_date, end_date]``,
+            fill values replaced by NaN, and the node dimension renamed
+            to ``'node'``.
+
+        Raises
+        ------
+        KeyError
+            If the requested variable is not present in the file.
+        OSError
+            If the file cannot be opened.
+        """
+        _logger.info("Opening UFS_SCHISM file: %s", path)
+        var_name = self.model_dict['var']
+        var_type = self.model_dict['var_type']
+
+        with xr.open_dataset(path) as ds:
+            if var_name not in ds:
+                raise KeyError(
+                    f"Variable '{var_name}' not found in {path}. "
+                    f"Available: {list(ds.data_vars)}"
+                )
+            da = ds[var_name].sel(
+                time=slice(self.start_date, self.end_date)
+            ).load()
+
+        da = self._mask_fill(da)
+        da = self._rename_node_dim(da)
+
+        if var_type == '3D_Surface':
+            # Old I/O dim order after rename: (time, node, nSCHISM_vgrid_layers)
+            # Surface = last layer index
+            layer_dim = next(
+                (d for d in da.dims if d not in ('time', 'node')),
+                None,
+            )
+            if layer_dim is not None:
+                _logger.info(
+                    "Extracting surface layer (last index of '%s').",
+                    layer_dim,
+                )
+                da = da.isel({layer_dim: -1})
+
+        return da
+
+    def load_3d_file_pair(self, path: str) -> xr.Dataset:
+        """
+        Load a 3-D variable and its z-coordinate from the **same**
+        ``schout_N.nc`` file.
+
+        This mirrors the interface of ``SCHISM.load_3d_file_pair`` so
+        that the ``Collocate`` engine can use either class without
+        modification.
+
+        Parameters
+        ----------
+        path : str
+            Full path to the ``schout_N.nc`` file.
+
+        Returns
+        -------
+        xr.Dataset
+            In-memory dataset containing the main 3-D variable and
+            ``zcor``, with fill values replaced by NaN, the node
+            dimension renamed to ``'node'``, and the dataset sliced to
+            ``[start_date, end_date]``.
+
+        Notes
+        -----
+        Old I/O dimension order for 3-D variables is
+        ``(time, nSCHISM_hgrid_node, nSCHISM_vgrid_layers)``.
+        The collocation engine's ``_extract_model_profiles_3d`` helper
+        detects the layer dimension by name and handles any storage
+        order, so no global transpose is needed here.
+
+        Raises
+        ------
+        ValueError
+            If either the main variable or ``zcor`` is absent in the
+            file.
+        OSError
+            If the file cannot be opened.
+        """
+        main_var = self.model_dict['var']
+        zcor_var = self.model_dict.get('zcor_var', 'zcor')
+
+        _logger.info(
+            "Loading 3-D UFS_SCHISM file (single file, old I/O): %s", path
+        )
+        try:
+            with xr.open_dataset(path) as ds:
+                for v in (main_var, zcor_var):
+                    if v not in ds:
+                        raise ValueError(
+                            f"Variable '{v}' not found in {path}. "
+                            f"Available: {list(ds.data_vars)}"
+                        )
+
+                time_slice = slice(self.start_date, self.end_date)
+                ds_out = ds[[main_var, zcor_var]].sel(time=time_slice)
+                ds_out = ds_out.load()
+
+            # Mask fill values in both variables
+            for v in (main_var, zcor_var):
+                ds_out[v] = self._mask_fill(ds_out[v])
+
+            # Normalise the node dimension name
+            ds_out = self._rename_node_dim(ds_out)
+
+            return ds_out
+
+        except (OSError, KeyError) as exc:
+            _logger.error(
+                "Error loading 3-D data from %s: %s", path, exc
+            )
+            raise
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def mesh_x(self) -> np.ndarray:
+        """Return mesh node longitudes (degrees east)."""
+        return self._mesh_x
+
+    @mesh_x.setter
+    def mesh_x(self, value: Union[np.ndarray, list]) -> None:
+        """Set mesh node longitudes."""
+        if len(value) != len(self._mesh_x):
+            raise ValueError(
+                f"New longitude array length ({len(value)}) must match "
+                f"existing size ({len(self._mesh_x)})."
+            )
+        self._mesh_x = np.asarray(value)
+
+    @property
+    def mesh_y(self) -> np.ndarray:
+        """Return mesh node latitudes (degrees north)."""
+        return self._mesh_y
+
+    @mesh_y.setter
+    def mesh_y(self, value: Union[np.ndarray, list]) -> None:
+        """Set mesh node latitudes."""
+        if len(value) != len(self._mesh_y):
+            raise ValueError(
+                f"New latitude array length ({len(value)}) must match "
+                f"existing size ({len(self._mesh_y)})."
+            )
+        self._mesh_y = np.asarray(value)
+
+    @property
+    def mesh_depth(self) -> np.ndarray:
+        """Return mesh node depths (positive down, metres)."""
+        return self._mesh_depth
+
+    @property
+    def files(self) -> List[str]:
+        """Return the naturally sorted list of selected output files."""
+        return self._files
+
+    @property
+    def time(self) -> np.ndarray:
+        """
+        Return the concatenated, sorted time array across all selected
+        files.  Cached after the first call.
+        """
+        if self._time is not None:
+            return self._time
+
+        if not self._files:
+            return np.array([])
+
+        all_times = []
+        for fpath in self._files:
+            try:
+                with xr.open_dataset(fpath, decode_times=False) as ds:
+                    if 'time' not in ds:
+                        continue
+                    t = ds['time'].values
+                    if not np.issubdtype(t.dtype, np.datetime64):
+                        t = xr.decode_cf(ds[['time']])['time'].values
+                    all_times.append(t)
+            except (OSError, KeyError, ValueError) as exc:
+                _logger.warning(
+                    "Could not read time from %s: %s", fpath, exc
+                )
+
+        if all_times:
+            self._time = np.sort(np.concatenate(all_times))
         else:
             self._time = np.array([])
 
