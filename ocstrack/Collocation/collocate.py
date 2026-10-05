@@ -27,6 +27,28 @@ MODEL_TO_OBS_VAR = {'sigWaveHeight': 'swh'}
 # Default observation variable when a model variable is not in the map above.
 DEFAULT_OBS_VAR = 'swh'
 
+# Mapping from raw model variable names (which may differ between model
+# I/O formats) to canonical semantic names used in collocation output.
+# This ensures that 'temp' (old SCHISM I/O) and 'temperature' (new I/O)
+# both produce output variables named 'model_temperature', and similarly
+# 'salt' → 'model_salinity'.
+_VAR_SEMANTIC_MAP = {
+    'temp':        'temperature',
+    'salt':        'salinity',
+    'elev':        'elevation',
+    'temperature': 'temperature',
+    'salinity':    'salinity',
+}
+
+# Mapping from model variable name to the corresponding Argo variable name.
+# Covers both new I/O names (temperature/salinity) and old I/O names (temp/salt).
+_OBS_VAR_MAP = {
+    'temperature': 'temp',
+    'salinity':    'psal',
+    'temp':        'temp',
+    'salt':        'psal',
+}
+
 
 class Collocate:
     """
@@ -117,6 +139,7 @@ class Collocate:
             _logger.warning("`gsw` library not found."
                             " `pip install gsw` for accurate depth conversion."
                             " Falling back to simple approximation (dbar * -1.0197).")
+
         # Time buffer logic based on collocation type
         if time_buffer is None:
             _logger.info("Inferring time_buffer...")
@@ -202,8 +225,8 @@ class Collocate:
         """
         if self.collocation_type in ['2D', '3D_Surface']:
             if not isinstance(self.obs, SatelliteData):
-                raise TypeError("2D/3D_Surface collocation requires" \
-                "SatelliteData observation type.")
+                raise TypeError("2D/3D_Surface collocation requires "
+                                 "SatelliteData observation type.")
             _logger.info("Starting 2D/Surface collocation...")
             return self._run_surface_collocation(output_path)
 
@@ -373,15 +396,26 @@ class Collocate:
         # default in UFS_SCHISM.load_3d_file_pair().
         zcor_var = self.model.model_dict.get('zcor_var', 'zcor')
 
-        # Map model var name to argo var name
-        obs_var_map = {'temperature': 'temp', 'salinity': 'psal', 'temp': 'temp'}
-        obs_var = obs_var_map.get(main_var)
+        # FIX: Map raw model variable names (e.g. old I/O 'temp', 'salt')
+        # to canonical semantic names used in the output dataset.
+        # This ensures consistent output naming regardless of whether the
+        # model uses new I/O ('temperature') or old I/O ('temp') names.
+        main_var_out = _VAR_SEMANTIC_MAP.get(main_var, main_var)
+
+        # FIX: Map model variable name to the matching Argo variable name.
+        # Covers both new I/O names and old I/O names (temp → 'temp',
+        # salt → 'psal').
+        obs_var = _OBS_VAR_MAP.get(main_var)
         if obs_var is None:
-            raise ValueError(f"No Argo variable mapping for model var '{main_var}'")
+            raise ValueError(
+                f"No Argo variable mapping for model var '{main_var}'. "
+                f"Supported model variable names: {list(_OBS_VAR_MAP.keys())}"
+            )
 
         max_levels = self.obs.ds.sizes['N_LEVELS']
 
-        # Create lists to store results from each loop
+        # Create lists to store results from each loop.
+        # Output arrays use main_var_out (semantic name) for consistency.
         results_list = {
             "time": [],
             "lat": [],
@@ -391,13 +425,13 @@ class Collocate:
             "node_idx": [],
             "argo_depth": [],
             f"argo_{obs_var}": [],
-            f"model_{main_var}": [],
+            f"model_{main_var_out}": [],
         }
 
         # Loop through model files
         for f_main_path in tqdm(self.model.files, desc="Collocating 3D Profiles"):
             try:
-                # Load just this one file's data (temp + zcor)
+                # Load just this one file's data (main var + zcor)
                 m_data = self.model.load_3d_file_pair(f_main_path)
             except (OSError, KeyError, ValueError) as e:
                 _logger.warning(f"Skipping file {f_main_path} due to load error: {e}")
@@ -450,7 +484,7 @@ class Collocate:
                 model_data=m_data
             )
 
-            # 4. Append results to list
+            # 4. Append results to list using semantic output name
             results_list["time"].append(argo_sub[self.obs_time_coord].values)
             results_list["lat"].append(lats)
             results_list["lon"].append(lons)
@@ -459,7 +493,7 @@ class Collocate:
             results_list["node_idx"].append(nodes)
             results_list["argo_depth"].append(v_data["obs_depth"])
             results_list[f"argo_{obs_var}"].append(v_data["obs_var"])
-            results_list[f"model_{main_var}"].append(v_data["model_var_interp"])
+            results_list[f"model_{main_var_out}"].append(v_data["model_var_interp"])
 
             m_data.close() # Close the file before loading the next
 
@@ -474,7 +508,7 @@ class Collocate:
         final_results = {}
         for key, value in results_list.items():
             if key in ["dist_deltas", "node_idx", "argo_depth",
-                       f"argo_{obs_var}", f"model_{main_var}"]:
+                       f"argo_{obs_var}", f"model_{main_var_out}"]:
                 final_results[key] = np.vstack(value)
             else:
                 final_results[key] = np.concatenate(value)
@@ -515,15 +549,16 @@ class Collocate:
         dists : np.ndarray
             Array of distances to nearest nodes, shape (n_profiles, k_nearest).
         model_var_name : str
-            The name of the main model variable (e.g., 'temperature').
+            The name of the main model variable as it appears in the file
+            (e.g., 'temperature', 'temp').
         model_zcor_name : str
             The name of the model z-coordinate variable (e.g., 'zcor').
         obs_var_name : str
-            The name of the main observation variable (e.g., 'temp').
+            The name of the Argo observation variable (e.g., 'temp', 'psal').
         max_levels : int
             The maximum number of vertical levels for padding the output arrays.
         model_data : xr.Dataset
-            Single file.
+            Single loaded model file dataset.
 
         Returns
         -------
@@ -701,24 +736,20 @@ class Collocate:
         np.ndarray
             An array of observation heights.
         """
-        # For Satellite
         if 'height' in obs_sub:
             return obs_sub["height"].values
         if 'altitude' in obs_sub:
             return obs_sub["altitude"].values
 
-        # For ArgoData
         if isinstance(self.obs, ArgoData):
             return np.zeros_like(obs_sub["LONGITUDE"].values)
 
         _logger.warning("No 'height' or 'altitude' in obs data. "
                         "Defaulting to 0m for geocentric query.")
-        # Fallback for SatelliteData without height
         try:
             return np.zeros_like(obs_sub["lon"].values)
         except KeyError:
             return np.zeros_like(obs_sub["LONGITUDE"].values)
-
 
     def _collocate_with_radius(self, obs_sub, m_var, time_args):
         """
@@ -736,7 +767,7 @@ class Collocate:
         Returns
         -------
         dict
-            Dictionary containing 2D collocated arrays (e.g., "model_var", "dist_deltas").
+            Dictionary containing 2D collocated arrays.
         """
 
         model_var_name = self.model.model_dict['var']
@@ -769,7 +800,6 @@ class Collocate:
 
             flat_nodes.extend(nodes)
 
-        # Handle case where no nodes were found for any obs
         if not flat_nodes:
             n_obs = len(lons)
             nan_arr = np.full((n_obs, 1), np.nan)
@@ -783,19 +813,17 @@ class Collocate:
                 "bias_weighted": np.full(n_obs, np.nan),
             }
 
-        # Perform extraction once
         if self.temporal_interp:
             m_vals, m_dpts = self._extract_model_values(
                 m_var, (np.array(flat_ib),
                         np.array(flat_ia),
-                        np.array(flat_wt)),np.array(flat_nodes)
+                        np.array(flat_wt)), np.array(flat_nodes)
             )
         else:
             m_vals, m_dpts = self._extract_model_values(
                 m_var, np.array(flat_ib), np.array(flat_nodes)
             )
 
-        # Reshape into per-observation lists
         def unflatten(arr, lens):
             return np.split(arr, np.cumsum(lens)[:-1])
 
@@ -803,10 +831,9 @@ class Collocate:
         split_dpts = unflatten(m_dpts, obs_lens)
         split_dists = unflatten(
             np.concatenate([np.array(d) for d in all_dists if len(d) > 0]), obs_lens
-            )
+        )
         split_nodes = unflatten(np.array(flat_nodes), obs_lens)
 
-        # Handle obs with no neighbors
         def pad(arrs):
             max_len = max((len(a) for a in arrs), default=1)
             return np.stack([
@@ -849,7 +876,7 @@ class Collocate:
         Returns
         -------
         dict
-            Dictionary containing 2D collocated arrays (e.g., "model_var", "dist_deltas").
+            Dictionary containing 2D collocated arrays.
         """
 
         model_var_name = self.model.model_dict['var']
@@ -892,7 +919,7 @@ class Collocate:
         Parameters
         ----------
         m_var : xarray.DataArray
-            Model variable to extract from (e.g. significant wave height)
+            Model variable to extract from
         times_or_inds : tuple or list
             Time indices or interpolation args (ib, ia, wts)
         nodes : np.ndarray
@@ -954,10 +981,9 @@ class Collocate:
 
         return np.array(values), np.array(dpts)
 
-
     def _coast_distance(self,
-                          lats: np.ndarray,
-                          lons: np.ndarray) -> np.ndarray:
+                        lats: np.ndarray,
+                        lons: np.ndarray) -> np.ndarray:
         """
         Get distance to coast for given lat/lon points using optional dataset.
 
