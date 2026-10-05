@@ -64,6 +64,41 @@ def _parse_gr3_mesh(filepath: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
     return lons, lats, depths
 
+
+def _check_time_overlap(times: np.ndarray,
+                        start_date: np.datetime64,
+                        end_date: np.datetime64,
+                        filepath: str = "") -> bool:
+    """
+    Return True if *times* overlaps [start_date, end_date], False otherwise.
+
+    Guards against empty time arrays that would cause an IndexError when
+    accessed with times[-1] or times[0].
+
+    Parameters
+    ----------
+    times : np.ndarray
+        Array of datetime64 values decoded from a model file.
+    start_date : np.datetime64
+        Requested collocation start date.
+    end_date : np.datetime64
+        Requested collocation end date.
+    filepath : str, optional
+        File path used only for the warning message.
+
+    Returns
+    -------
+    bool
+        True if the file's time range overlaps the requested window.
+    """
+    if len(times) == 0:
+        _logger.warning(
+            "File %s contains no time records — skipping.", filepath
+        )
+        return False
+    return bool(times[-1] >= start_date and times[0] <= end_date)
+
+
 class SCHISM:
     """
     SCHISM model interface
@@ -158,12 +193,6 @@ class SCHISM:
         -------
         List[str]
             List of file paths to model outputs that overlap with the requested time window
-
-        Notes
-        -----
-        Only files that contain a 'time' variable and overlap the specified time window
-        are selected.
-        Time decoding is limited to the 'time' variable for performance and robustness.
         """
         if not os.path.isdir(self.output_dir):
             _logger.warning(f"Output directory {self.output_dir} does not exist.")
@@ -183,18 +212,20 @@ class SCHISM:
                 with xr.open_dataset(fpath, decode_times=False) as ds:
                     if 'time' not in ds.variables:
                         continue
-                    times = ds['time'].values
-                    times = xr.decode_cf(ds[['time']])['time'].values  # decode only time
-
-                    if times[-1] >= self.start_date and times[0] <= self.end_date:
+                    times = xr.decode_cf(ds[['time']])['time'].values
+                    if _check_time_overlap(times, self.start_date,
+                                           self.end_date, fpath):
                         selected.append(fpath)
             except (OSError, KeyError, ValueError) as e:
                 _logger.warning(f"Error reading {fpath}: {e}")
                 continue
-            # selected.append(os.path.join(self.output_dir, fname))
+
         if not selected:
-            _logger.warning(f"No files matched pattern in {self.output_dir}.\n"
-            f"Make sure the model files fall within {self.start_date} and {self.end_date} ")
+            _logger.warning(
+                f"No files matched pattern in {self.output_dir}.\n"
+                f"Make sure the model files fall within "
+                f"{self.start_date} and {self.end_date}"
+            )
         return selected
 
     def load_variable(self, path: str) -> xr.DataArray:
@@ -209,7 +240,7 @@ class SCHISM:
         Returns
         -------
         xr.DataArray
-            The requested variable, , surface-only if var_type is '3D_Surface'
+            The requested variable, surface-only if var_type is '3D_Surface'
 
         Notes
         -----
@@ -242,7 +273,6 @@ class SCHISM:
             A single, in-memory dataset containing the 3D variable
             and its 'zcor' variable for the time steps in that file.
         """
-
         main_var = self.model_dict['var']
         main_startswith = self.model_dict['startswith']
         zcor_var = self.model_dict['zcor_var']
@@ -270,10 +300,7 @@ class SCHISM:
             # Merge
             ds_merged = xr.merge([ds_main, ds_zcor])
 
-            # Normalise SCHISM New I/O dimension names so that the collocation
-            # engine can always find the spatial dimension as 'node'.
-            # SCHISM outputs use 'nSCHISM_hgrid_node'; the Collocate class
-            # calls .isel(node=...), so we rename here once.
+            # Normalise SCHISM New I/O dimension names
             rename_map = {}
             for dim in list(ds_merged.dims):
                 if dim == 'nSCHISM_hgrid_node':
@@ -281,11 +308,10 @@ class SCHISM:
             if rename_map:
                 ds_merged = ds_merged.rename(rename_map)
 
-            # Slice by time *before* loading, just in case
+            # Slice by time *before* loading
             time_slice = slice(self.start_date, self.end_date)
             ds_sliced = ds_merged.sel(time=time_slice)
 
-            # Load this small chunk into memory
             ds_sliced.load()
             ds_main.close()
             ds_zcor.close()
@@ -343,16 +369,11 @@ class SCHISM:
             return np.array([])
 
         all_times = []
-        # print("Generating global time array from files...") # Optional debug print
         for fpath in self.files:
             try:
-                # Open strictly to read the time variable
                 with xr.open_dataset(fpath) as ds:
-                    # Ensure we get datetime64 objects
                     if 'time' in ds:
                         t = ds['time'].values
-                        # If simple float/int, try to decode. If already datetime, use as is.
-                        # (SCHISM usually needs decoding if not CF-encoded)
                         if not np.issubdtype(t.dtype, np.datetime64):
                             t = xr.decode_cf(ds[['time']])['time'].values
                         all_times.append(t)
@@ -361,12 +382,12 @@ class SCHISM:
 
         if all_times:
             self._time = np.concatenate(all_times)
-            # Ensure it is sorted, just in case files were out of order
             self._time.sort()
         else:
             self._time = np.array([])
 
         return self._time
+
 
 class ADCSWAN:
     """
@@ -394,21 +415,18 @@ class ADCSWAN:
             Path to the directory containing the model output NetCDF file
         model_dict : dict
             Dictionary with keys: 'startswith', 'var'.
-            'startswith' is the prefix of the NetCDF file (e.g., "swan_HS.63")
-            'var' is the variable to be loaded (e.g., "swan_HS")
         start_date : np.datetime64
             Start of the time range for validation and slicing (if needed)
         end_date : np.datetime64
             End of the time range for validation and slicing (if needed)
         **kwargs :
-            Ignored. Added for interface compatibility with SCHISM (e.g., output_subdir).
+            Ignored. Added for interface compatibility with SCHISM.
         """
         self.rundir = rundir
         self.model_dict = model_dict
         self.start_date = np.datetime64(start_date)
         self.end_date = np.datetime64(end_date)
 
-        # Note: self.output_dir is kept for SCHISM compatibility but points to rundir
         self.output_dir = self.rundir
 
         self._validate_model_dict()
@@ -440,7 +458,6 @@ class ADCSWAN:
         if missing:
             raise ValueError(f"Missing keys in model_dict: {missing}")
 
-        # If var_type is supplied, validate it
         valid_types = ['2D', '3D_Surface', '3D_Profile']
         var_type = self.model_dict.get('var_type')
         if var_type is not None and var_type not in valid_types:
@@ -456,7 +473,6 @@ class ADCSWAN:
         _logger.debug(f"Loading mesh data from {filepath}")
         try:
             with xr.open_dataset(filepath, drop_variables=['neta','nvel']) as ds:
-                # Use .load() to read data into memory and close the file
                 lons = ds['x'].load().values
                 lats = ds['y'].load().values
                 depths = ds['depth'].load().values
@@ -464,7 +480,6 @@ class ADCSWAN:
         except (OSError, KeyError) as e:
             _logger.error(f"Failed to load mesh data from {filepath}: {e}")
             return np.array([]), np.array([]), np.array([])
-
 
     def _select_model_files(self) -> List[str]:
         """
@@ -484,10 +499,9 @@ class ADCSWAN:
                      if os.path.isfile(os.path.join(self.rundir, f))]
         all_files.sort(key=natural_sort_key)
 
-        selected = []
         file_pattern = self.model_dict['startswith']
-
-        found_files = [f for f in all_files if f.startswith(file_pattern) and f.endswith(".nc")]
+        found_files = [f for f in all_files
+                       if f.startswith(file_pattern) and f.endswith(".nc")]
 
         if not found_files:
             _logger.warning(f"No file found in {self.rundir} starting with '{file_pattern}'")
@@ -500,26 +514,25 @@ class ADCSWAN:
         fpath = os.path.join(self.rundir, found_files[0])
 
         try:
-            # Check time range for overlap
-            with xr.open_dataset(fpath, decode_times=False, drop_variables=['neta','nvel']) as ds:
+            with xr.open_dataset(fpath, decode_times=False,
+                                 drop_variables=['neta','nvel']) as ds:
                 if 'time' not in ds.variables:
                     _logger.warning(f"File {fpath} has no 'time' variable. Skipping.")
                     return []
 
-                # Decode only time for validation
                 times = xr.decode_cf(ds[['time']])['time'].values
+                if not _check_time_overlap(times, self.start_date,
+                                           self.end_date, fpath):
+                    _logger.warning(
+                        f"File {fpath} time range does not overlap with "
+                        f"requested range ({self.start_date} to {self.end_date})."
+                    )
+                    return []
+                return [fpath]
 
-                if times[-1] >= self.start_date and times[0] <= self.end_date:
-                    selected.append(fpath)
-                else:
-                    _logger.warning(f"File {fpath} time range ({times[0]} to {times[-1]}) "
-                                    f"does not overlap with requested range "
-                                    f"({self.start_date} to {self.end_date}).")
         except (OSError, KeyError, ValueError) as e:
             _logger.warning(f"Error reading {fpath}: {e}")
             return []
-
-        return selected
 
     def load_variable(self, path: str) -> xr.DataArray:
         """
@@ -528,17 +541,12 @@ class ADCSWAN:
         Parameters
         ----------
         path : str
-            Path to the NetCDF file to open (should be the one in self.files)
+            Path to the NetCDF file to open
 
         Returns
         -------
         xr.DataArray
             The requested variable, sliced by time.
-        
-        Notes
-        -----
-        For compatibility with the SCHISM class pattern, this method loads
-        the variable from the *given path*.
         """
         _logger.info("Opening model file: %s", path)
         try:
@@ -669,7 +677,6 @@ class WW3:
         if missing:
             raise ValueError(f"Missing keys in model_dict: {missing}")
 
-        # If var_type is supplied, validate it
         valid_types = ['2D', '3D_Surface', '3D_Profile']
         var_type = self.model_dict.get('var_type')
         if var_type is not None and var_type not in valid_types:
@@ -702,24 +709,25 @@ class WW3:
                 with xr.open_dataset(fpath, decode_times=False) as ds:
                     if 'time' not in ds.variables:
                         continue
-                    times = ds['time'].values
                     times = xr.decode_cf(ds[['time']])['time'].values
-
-                    if times[-1] >= self.start_date and times[0] <= self.end_date:
+                    if _check_time_overlap(times, self.start_date,
+                                           self.end_date, fpath):
                         selected.append(fpath)
             except (OSError, KeyError, ValueError) as e:
                 _logger.warning(f"Error reading {fpath}: {e}")
                 continue
 
         if not selected:
-            _logger.warning(f"No files matched pattern in {self.output_dir}.\n"
-            f"Make sure the model files fall within {self.start_date} and {self.end_date} ")
+            _logger.warning(
+                f"No files matched pattern in {self.output_dir}.\n"
+                f"Make sure the model files fall within "
+                f"{self.start_date} and {self.end_date}"
+            )
         return selected
 
     def _load_mesh_data(self, filepath: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Parse the WW3 NetCDF file to extract node coordinates.
-        It is assumed that WW3 is an unstructured grid with 'longitude' and 'latitude' variables.
         Depth is not available in WW3 output, so it is returned as an array of NaNs.
         """
         _logger.debug(f"Loading mesh data from {filepath}")
@@ -757,7 +765,6 @@ class WW3:
             var_sliced = var.sel(time=time_slice)
             var_loaded = var_sliced.load()
             ds.close()
-
             return var_loaded
         except KeyError:
             _logger.error(f"Variable '{self.model_dict['var']}' not found in {path}")
@@ -835,6 +842,7 @@ class WW3:
 
         return self._time
 
+
 def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
     # pylint: disable=invalid-name,too-many-arguments,too-many-positional-arguments
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
@@ -879,14 +887,8 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
 
     Np=N+1
 
-    #-----------------------------------------------------------------
-    # Compute ROMS S-coordinates vertical stretching function
-    #-----------------------------------------------------------------
-
-    # Original vertical stretching function (Song and Haidvogel, 1994).
     if Vstretching == 1:
         ds = 1.0/N
-
         if kgrid == 1:
             Nlev = Np
             lev  = np.linspace(0.0,N,Np)
@@ -895,7 +897,6 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
             Nlev = N
             lev  = np.linspace(1.0,N,Np)-0.5
             s    = (lev-N)*ds
-
         if theta_s > 0:
             Ptheta = np.sinh(theta_s*s)/np.sinh(theta_s)
             Rtheta = np.tanh(theta_s*(s+0.5))/(2.0*np.tanh(0.5*theta_s))-0.5
@@ -903,12 +904,10 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
         else:
             C=s
 
-    # A. Shchepetkin (UCLA-ROMS, 2005) vertical stretching function.
     if Vstretching==2:
         alfa = 1.0
         beta = 1.0
         ds   = 1.0/N
-
         if kgrid == 1:
             Nlev = Np
             lev  = np.linspace(0.0,N,Np)
@@ -917,7 +916,6 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
             Nlev = N
             lev  = np.linspace(1.0,N,Np)-0.5
             s    = (lev-N)*ds
-
         if theta_s > 0:
             Csur = (1.0-np.cosh(theta_s*s))/(np.cosh(theta_s)-1.0)
             if theta_b > 0:
@@ -931,10 +929,8 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
         else:
             C=s
 
-    # R. Geyer BBL vertical stretching function.
     if Vstretching==3:
         ds   = 1.0/N
-
         if kgrid == 1:
             Nlev = Np
             lev  = np.linspace(0.0,N,Np)
@@ -943,11 +939,10 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
             Nlev = N
             lev  = np.linspace(1.0,N,Np)-0.5
             s    = (lev-N)*ds
-
         if theta_s > 0:
-            exp_s = theta_s   # surface stretching exponent
-            exp_b = theta_b   # bottom  stretching exponent
-            alpha = 3      # scale factor for all hyperbolic functions
+            exp_s = theta_s
+            exp_b = theta_b
+            alpha = 3
             Cbot  = np.log(np.cosh(alpha*(s+1.0)**exp_b))/np.log(np.cosh(alpha))-1.0
             Csur  = -np.log(np.cosh(alpha*abs(s)**exp_s))/np.log(np.cosh(alpha))
             weight= (1-np.tanh( alpha*(s+0.5)))/2.0
@@ -955,11 +950,8 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
         else:
             C=s
 
-    # A. Shchepetkin (UCLA-ROMS, 2010) double vertical stretching function
-    # with bottom refinement
     if Vstretching == 4:
         ds   = 1.0/N
-
         if kgrid == 1:
             Nlev = Np
             lev  = np.linspace(0.0,N,Np)
@@ -968,12 +960,10 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
             Nlev = N
             lev  = np.linspace(1.0,N,Np)-0.5
             s    = (lev-N)*ds
-
         if theta_s > 0:
             Csur = (1.0-np.cosh(theta_s*s))/(np.cosh(theta_s)-1.0)
         else:
             Csur = -s**2
-
         if theta_b > 0:
             Cbot = (np.exp(theta_b*Csur)-1.0)/(1.0-np.exp(-theta_b))
             C    = Cbot
@@ -983,69 +973,14 @@ def stretching(Vstretching, theta_s, theta_b, hc, N, kgrid):
     return (s,C)
 
 
-def set_depth( Vtransform, Vstretching, theta_s, theta_b, hc, N, igrid, h, zeta ):
+def set_depth(Vtransform, Vstretching, theta_s, theta_b, hc, N, igrid, h, zeta):
     # pylint: disable=invalid-name,too-many-arguments,too-many-positional-arguments
     # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     """
-     Given a batymetry (h), free-surface (zeta) and terrain-following
+     Given a bathymetry (h), free-surface (zeta) and terrain-following
      parameters, this function computes the 3D depths for the requested
-     C-grid location. If the free-surface is not provided, a zero value
-     is assumed resulting in unperturb depths.  This function can be
-     used when generating initial conditions or climatology data for
-     an application. Check the following link for details:
-
-        https://www.myroms.org/wiki/index.php/Vertical_S-coordinate
-
-     On Input:
-
-        Vtransform    Vertical transformation equation:
-
-                        Vtransform = 1,   original transformation
-
-                        z(x,y,s,t)=Zo(x,y,s)+zeta(x,y,t)*[1+Zo(x,y,s)/h(x,y)]
-
-                        Zo(x,y,s)=hc*s+[h(x,y)-hc]*C(s)
-
-                        Vtransform = 2,   new transformation
-
-                        z(x,y,s,t)=zeta(x,y,t)+[zeta(x,y,t)+h(x,y)]*Zo(x,y,s)
-
-                        Zo(x,y,s)=[hc*s(k)+h(x,y)*C(k)]/[hc+h(x,y)]
-
-        Vstretching   Vertical stretching function:
-                        Vstretching = 1,  original (Song and Haidvogel, 1994)
-                        Vstretching = 2,  A. Shchepetkin (UCLA-ROMS, 2005)
-                        Vstretching = 3,  R. Geyer BBL refinement
-                        Vstretching = 4,  A. Shchepetkin (UCLA-ROMS, 2010)
-
-        theta_s       S-coordinate surface control parameter (scalar)
-
-        theta_b       S-coordinate bottom control parameter (scalar)
-
-        hc            Width (m) of surface or bottom boundary layer in which
-                        higher vertical resolution is required during
-                        stretching (scalar)
-
-        N             Number of vertical levels (scalar)
-
-        igrid         Staggered grid C-type (integer):
-                        igrid=1  => density points
-                        igrid=2  => streamfunction points
-                        igrid=3  => u-velocity points
-                        igrid=4  => v-velocity points
-                        igrid=5  => w-velocity points
-
-        h             Bottom depth, 2D array at RHO-points (m, positive),
-                        h(1:Lp+1,1:Mp+1)
-
-        zeta          Free-surface, 2D array at RHO-points (m), OPTIONAL,
-                        zeta(1:Lp+1,1:Mp+1)
-
-     On Output:
-
-        z             Depths (m, negative), 3D array
+     C-grid location.
     """
-
     Np      = N+1
     Lp,Mp   = np.shape(h)
     L       = Lp-1
@@ -1061,9 +996,6 @@ def set_depth( Vtransform, Vstretching, theta_s, theta_b, hc, N, igrid, h, zeta 
         kgrid=0
 
     s,C = stretching(Vstretching, theta_s, theta_b, hc, N, kgrid)
-    #-----------------------------------------------------------------------
-    #  Average bathymetry and free-surface at requested C-grid type.
-    #-----------------------------------------------------------------------
 
     if igrid==1:
         hr    = h
@@ -1081,54 +1013,52 @@ def set_depth( Vtransform, Vstretching, theta_s, theta_b, hc, N, igrid, h, zeta 
         hr    = h
         zetar = zeta
 
-    #----------------------------------------------------------------------
-    # Compute depths (m) at requested C-grid location.
-    #----------------------------------------------------------------------
     if Vtransform == 1:
         if igrid==1:
-            for k in range (0,N):
+            for k in range(0,N):
                 z0 = (s[k]-C[k])*hc + C[k]*hr
                 z[:,:,k] = z0 + zetar*(1.0 + z0/hr)
         elif igrid==2:
-            for k in range (0,N):
+            for k in range(0,N):
                 z0 = (s[k]-C[k])*hc + C[k]*hp
                 z[:,:,k] = z0 + zetap*(1.0 + z0/hp)
         elif igrid==3:
-            for k in range (0,N):
+            for k in range(0,N):
                 z0 = (s[k]-C[k])*hc + C[k]*hu
                 z[:,:,k] = z0 + zetau*(1.0 + z0/hu)
         elif igrid==4:
-            for k in range (0,N):
+            for k in range(0,N):
                 z0 = (s[k]-C[k])*hc + C[k]*hv
                 z[:,:,k] = z0 + zetav*(1.0 + z0/hv)
         elif igrid==5:
             z[:,:,0] = -hr
-            for k in range (0,Np):
+            for k in range(0,Np):
                 z0 = (s[k]-C[k])*hc + C[k]*hr
                 z[:,:,k] = z0 + zetar*(1.0 + z0/hr)
     elif Vtransform==2:
         if igrid==1:
-            for k in range (0,N):
+            for k in range(0,N):
                 z0 = (hc*s[k]+C[k]*hr)/(hc+hr)
                 z[:,:,k] = zetar+(zeta+hr)*z0
         elif igrid==2:
-            for k in range (0,N):
+            for k in range(0,N):
                 z0 = (hc*s[k]+C[k]*hp)/(hc+hp)
                 z[:,:,k] = zetap+(zetap+hp)*z0
         elif igrid==3:
-            for k in range (0,N):
+            for k in range(0,N):
                 z0 = (hc*s[k]+C[k]*hu)/(hc+hu)
                 z[:,:,k] = zetau+(zetau+hu)*z0
         elif igrid==4:
-            for k in range (0,N):
+            for k in range(0,N):
                 z0 = (hc*s[k]+C[k]*hv)/(hc+hv)
                 z[:,:,k] = zetav+(zetav+hv)*z0
         elif igrid==5:
-            for k in range (0,Np):
+            for k in range(0,Np):
                 z0 = (hc*s[k]+C[k]*hr)/(hc+hr)
                 z[:,:,k] = zetar+(zetar+hr)*z0
 
     return z
+
 
 class ROMS:
     """
@@ -1191,7 +1121,6 @@ class ROMS:
                 elif keyword == "GRDNAME":
                     self.grdname = value_str
 
-
     def _validate_model_dict(self) -> None:
         """
         Ensure the model_dict contains all required keys.
@@ -1232,10 +1161,9 @@ class ROMS:
                 with xr.open_dataset(fpath, decode_times=False) as ds:
                     if 'ocean_time' not in ds.variables:
                         continue
-                    times = ds['ocean_time'].values
                     times = xr.decode_cf(ds[['ocean_time']])['ocean_time'].values
-
-                    if times[-1] >= self.start_date and times[0] <= self.end_date:
+                    if _check_time_overlap(times, self.start_date,
+                                           self.end_date, fpath):
                         selected.append(fpath)
             except (OSError, KeyError, ValueError) as exception:
                 _logger.warning("Error reading %s: %s", fpath, exception)
@@ -1281,7 +1209,6 @@ class ROMS:
             main_var_data = ds[main_var]
             zeta_da = ds['zeta']
 
-            # Create an empty array for z_rho with the correct shape
             z_rho_shape = (
                 len(zeta_da['ocean_time']),
                 self.N,
@@ -1290,7 +1217,6 @@ class ROMS:
             )
             z_rho_all = np.empty(z_rho_shape)
 
-            # Loop over each time step to calculate z_rho
             for t_idx in range(len(zeta_da['ocean_time'])):
                 zeta_t = zeta_da.isel(ocean_time=t_idx).values
                 z_rho_t = set_depth(
@@ -1304,7 +1230,6 @@ class ROMS:
                     self.h,
                     zeta_t,
                 )
-                # The output of set_depth is (eta, xi, s_rho), so we need to transpose it
                 z_rho_all[t_idx, :, :, :] = np.transpose(z_rho_t, (2, 0, 1))
 
             ds_out = xr.Dataset(
@@ -1314,7 +1239,6 @@ class ROMS:
                 },
                 coords=ds.coords
             )
-            # Stack dimensions and rename to be compatible with Collocate class
             ds_out = ds_out.stack(node=('eta_rho', 'xi_rho'))
             ds_out = ds_out.rename({'ocean_time': 'time'})
             return ds_out
@@ -1516,7 +1440,8 @@ class UFS_SCHISM:
                     if 'time' not in ds.variables:
                         continue
                     times = xr.decode_cf(ds[['time']])['time'].values
-                    if times[-1] >= self.start_date and times[0] <= self.end_date:
+                    if _check_time_overlap(times, self.start_date,
+                                           self.end_date, fpath):
                         selected.append(fpath)
             except (OSError, KeyError, ValueError) as exc:
                 _logger.warning("Error reading %s: %s", fpath, exc)
@@ -1783,7 +1708,8 @@ class UFS_SCHISM:
                     t = ds['time'].values
                     if not np.issubdtype(t.dtype, np.datetime64):
                         t = xr.decode_cf(ds[['time']])['time'].values
-                    all_times.append(t)
+                    if len(t) > 0:
+                        all_times.append(t)
             except (OSError, KeyError, ValueError) as exc:
                 _logger.warning(
                     "Could not read time from %s: %s", fpath, exc
