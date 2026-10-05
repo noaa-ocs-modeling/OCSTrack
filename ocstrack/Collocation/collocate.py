@@ -121,10 +121,8 @@ class Collocate:
         if time_buffer is None:
             _logger.info("Inferring time_buffer...")
 
-            # STRATEGY 1: Use the full time array if it exists (e.g. from your model.py fix)
+            # STRATEGY 1: Use the full time array if it exists
             if hasattr(self.model, 'time') and len(self.model.time) >= 2:
-                # Calculate mean timestep from the first few steps to be safe
-                # (Taking a small sample avoids overhead if array is huge)
                 sample_times = self.model.time[:100]
                 timestep = np.diff(sample_times).mean()
                 self.time_buffer = timestep / 2
@@ -137,20 +135,16 @@ class Collocate:
 
                 found_valid_dt = False
 
-                # Loop through files until we find one with >= 2 time steps
                 for i, example_file in enumerate(self.model.files):
                     try:
-                        # Load times based on type
                         if self.collocation_type in ['2D', '3D_Surface']:
                             times = self.model.load_variable(example_file)["time"].values
                         elif self.collocation_type == '3D_Profile':
-                            # Use context manager to ensure clean close
                             with self.model.load_3d_file_pair(example_file) as m_data:
                                 times = m_data.time.values
                         else:
                             raise ValueError(f"Unknown var_type: {self.collocation_type}")
 
-                        # Check if this file has enough data
                         if len(times) >= 2:
                             timestep = np.diff(times).mean()
                             self.time_buffer = timestep / 2
@@ -161,7 +155,7 @@ class Collocate:
                                 self.time_buffer,
                             )
                             found_valid_dt = True
-                            break # Stop looping, we found it!
+                            break
                         _logger.debug(
                             "File %s has insufficient time steps (%d). Checking next...",
                             example_file,
@@ -372,7 +366,12 @@ class Collocate:
 
         # Get variable names from model_dict
         main_var = self.model.model_dict['var']
-        zcor_var = self.model.model_dict['zcor_var']
+
+        # FIX: use .get() with default 'zcor' so that UFS_SCHISM (old I/O)
+        # does not require 'zcor_var' to be explicitly set in model_dict.
+        # The standard old I/O variable name is 'zcor', which is also the
+        # default in UFS_SCHISM.load_3d_file_pair().
+        zcor_var = self.model.model_dict.get('zcor_var', 'zcor')
 
         # Map model var name to argo var name
         obs_var_map = {'temperature': 'temp', 'salinity': 'psal', 'temp': 'temp'}
@@ -464,7 +463,7 @@ class Collocate:
 
             m_data.close() # Close the file before loading the next
 
-        # --- NEW: Concatenate all results at the end ---
+        # --- Concatenate all results at the end ---
         _logger.info("Assembling final dataset from all file chunks...")
 
         # Check if any results were found
@@ -518,7 +517,7 @@ class Collocate:
         model_var_name : str
             The name of the main model variable (e.g., 'temperature').
         model_zcor_name : str
-            The name of the model z-coordinate variable (e.g., 'zCoordinates').
+            The name of the model z-coordinate variable (e.g., 'zcor').
         obs_var_name : str
             The name of the main observation variable (e.g., 'temp').
         max_levels : int
@@ -543,12 +542,6 @@ class Collocate:
         out_obs_var = np.full((n_profiles, max_levels), np.nan)
         out_model_var = np.full((n_profiles, max_levels), np.nan)
 
-        # Get data from the argo_sub (the subset).
-        # Use adjusted values where finite, fall back to raw per element.
-        # xr.Dataset.get() returns the adjusted variable whenever the key
-        # exists as a variable, even if it is entirely NaN (real-time-mode
-        # Argo floats have _ADJUSTED = all-NaN before delayed-mode QC).
-        # The per-element fallback recovers those profiles.
         def _adj_or_raw(ds, adj_key, raw_key):
             raw = ds[raw_key].values if raw_key in ds else None
             adj = ds[adj_key].values if adj_key in ds else None
@@ -564,17 +557,9 @@ class Collocate:
         argo_all_var  = _adj_or_raw(argo_sub, argo_var_name_adj, argo_var_name_raw)
         argo_all_lats = argo_sub['LATITUDE'].values
 
-        # Use the passed model_data
         model_all_var = model_data[model_var_name]
         model_all_zcor = model_data[model_zcor_name]
 
-        # Identify the vertical-layer and node dimension names so that the
-        # per-profile slices below can be reordered to a canonical
-        # (layers, node) shape regardless of how the model stored them
-        # (SCHISM New I/O uses (time, node, vgrid_layers); ROMS uses
-        # (time, s_rho, node)).  Reordering is done on the SMALL selected
-        # slices (n_layers x k_nearest), never on the full lazy array, so it
-        # adds no meaningful memory or I/O cost.
         def _dim_of(da, *keys):
             for d in da.dims:
                 ds = str(d).lower()
@@ -596,7 +581,6 @@ class Collocate:
             return da_sel.values
 
         for i in tqdm(range(n_profiles), desc="Vertical Collocation"):
-            # profile *in the subset*.
             argo_pres_i = argo_all_pres[i, :]
             argo_lat_i = argo_all_lats[i]
 
@@ -732,7 +716,7 @@ class Collocate:
         # Fallback for SatelliteData without height
         try:
             return np.zeros_like(obs_sub["lon"].values)
-        except KeyError: # Fallback for ArgoData if it got here
+        except KeyError:
             return np.zeros_like(obs_sub["LONGITUDE"].values)
 
 
@@ -935,14 +919,14 @@ class Collocate:
         if self.search_radius is not None:
             if isinstance(times_or_inds, tuple):
                 ib, ia, wts = times_or_inds
-                for i, nd in enumerate(nodes): # nodes is flat 1D array
+                for i, nd in enumerate(nodes):
                     v0 = model_data[ib[i], nd]
                     v1 = model_data[ia[i], nd]
                     values.append(v0 * (1 - wts[i]) + v1 * wts[i])
                     dpts.append(depths[nd])
             else:
                 t_idx = times_or_inds
-                for i, nd in enumerate(nodes): # nodes is flat 1D array
+                for i, nd in enumerate(nodes):
                     values.append(model_data[t_idx[i], nd])
                     dpts.append(depths[nd])
 
@@ -950,7 +934,6 @@ class Collocate:
         else:
             if isinstance(times_or_inds, tuple):
                 ib, ia, wts = times_or_inds
-                # This handles nodes being shape (n_obs, k_nearest)
                 for i, ib_i in enumerate(ib):
                     nd = nodes[i]
                     v0 = model_data[ib_i, nd]
@@ -959,7 +942,6 @@ class Collocate:
                     dpts.append(depths[nd])
             else:
                 t_idx = times_or_inds
-                # This handles nodes being shape (n_obs, k_nearest)
                 for i, t_idx_i in enumerate(t_idx):
                     nd = nodes[i]
                     t = m_var["time"].values[t_idx_i]
