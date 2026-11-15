@@ -60,18 +60,25 @@ def inverse_distance_weights(distances: np.ndarray,
     -----
     If a distance is exactly 0, its weight becomes 1 and all others 0.
     """
-    # Check for zero distances
+    distances = np.asarray(distances, dtype=float)
+    weights = np.zeros_like(distances)
+
+    # A zero distance means the query point sits on a node, so that node takes
+    # all of the weight. Decide this per observation row, otherwise a single
+    # coincident observation zeroes out the weights of every other row.
     is_zero = distances == 0
-    if np.any(is_zero):
-        # If a point is at the exact same location, its weight is 1, others are 0
-        # Create a zero-filled array and place 1s where distance was 0
-        weights = np.zeros_like(distances)
-        weights[is_zero] = 1.0
-        return weights
-    
-    # Original calculation for non-zero distances
-    weights = 1.0 / np.power(distances, power)
-    return weights / weights.sum(axis=1, keepdims=True)
+    zero_rows = np.any(is_zero, axis=1)
+
+    if np.any(~zero_rows):
+        finite = distances[~zero_rows]
+        inv = 1.0 / np.power(finite, power)
+        weights[~zero_rows] = inv / inv.sum(axis=1, keepdims=True)
+
+    if np.any(zero_rows):
+        hits = is_zero[zero_rows].astype(float)
+        weights[zero_rows] = hits / hits.sum(axis=1, keepdims=True)
+
+    return weights
 
 class GeocentricSpatialLocator:
     """

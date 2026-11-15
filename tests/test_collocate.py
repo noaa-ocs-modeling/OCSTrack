@@ -201,3 +201,69 @@ class TestCollocateRunUnknownType:
         )
         with pytest.raises(NotImplementedError):
             col.run()
+
+
+# ---------------------------------------------------------------------------
+# Collocate.run with one observation sitting exactly on a model node
+# ---------------------------------------------------------------------------
+
+class TestCollocateRun2DCoincidentNode:
+    def _build(self):
+        n_nodes = 20
+        lons = np.linspace(-80.0, -70.0, n_nodes)
+        lats = np.linspace(30.0, 40.0, n_nodes)
+        times = np.array(
+            [f"2023-06-01T{h:02d}" for h in range(0, 24, 6)],
+            dtype="datetime64[ns]",
+        )
+        rng = np.random.default_rng(0)
+        model_da = xr.DataArray(
+            rng.random((len(times), n_nodes)) + 1.0,
+            dims=["time", "node"],
+            coords={"time": times},
+            name="sigWaveHeight",
+        )
+        model = MagicMock()
+        model.model_dict = {"var": "sigWaveHeight", "var_type": "2D"}
+        model.mesh_x = lons
+        model.mesh_y = lats
+        model.mesh_depth = np.ones(n_nodes) * 50.0
+        model.files = ["fake_file_0.nc"]
+        model.load_variable.return_value = model_da
+        type(model).time = PropertyMock(return_value=times)
+
+        # The first observation lands exactly on model node 5.
+        obs_ds = xr.Dataset(
+            {
+                "swh": ("time", np.array([1.0, 2.0, 3.0])),
+                "lat": ("time", np.array([lats[5], 35.0, 36.0])),
+                "lon": ("time", np.array([lons[5], -75.0, -73.0])),
+            },
+            coords={
+                "time": np.array(
+                    ["2023-06-01T01", "2023-06-01T07", "2023-06-01T13"],
+                    dtype="datetime64[ns]",
+                )
+            },
+        )
+        obs = MagicMock(spec=SatelliteData)
+        obs.ds = obs_ds
+
+        return Collocate(
+            model_run=model,
+            observation=obs,
+            n_nearest=3,
+            time_buffer=np.timedelta64(6, "h"),
+        )
+
+    def test_other_observations_keep_their_weighted_value(self):
+        ds = self._build().run()
+
+        weighted = ds["model_sigWaveHeight_weighted"].values
+        neighbours = ds["model_sigWaveHeight"].values
+
+        assert np.all(np.isfinite(weighted))
+        # Every weighted value must sit inside the range of its own neighbours.
+        for i in range(len(weighted)):
+            assert weighted[i] >= neighbours[i].min() - 1e-9
+            assert weighted[i] <= neighbours[i].max() + 1e-9
