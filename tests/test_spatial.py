@@ -45,3 +45,19 @@ def test_inverse_distance_weights_with_power():
     expected_weights = inv_d2 / np.sum(inv_d2)
     
     np.testing.assert_allclose(weights, expected_weights, rtol=1e-6)
+
+def test_inverse_distance_weights_zero_distance_is_per_row():
+    """
+    One row holding a zero distance must not zero out the other rows.
+    """
+    distances = np.array([[10.0, 20.0], [0.0, 30.0], [5.0, 15.0]])
+    power = 1.0
+
+    weights = inverse_distance_weights(distances, power)
+
+    np.testing.assert_allclose(weights.sum(axis=1), np.ones(3), rtol=1e-6)
+    np.testing.assert_allclose(weights[1], np.array([1.0, 0.0]), rtol=1e-6)
+
+    inv = 1.0 / distances[[0, 2]]
+    expected = inv / inv.sum(axis=1, keepdims=True)
+    np.testing.assert_allclose(weights[[0, 2]], expected, rtol=1e-6)
